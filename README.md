@@ -1,10 +1,16 @@
 # torchprof
 
-[![PyPI version](https://badge.fury.io/py/torchprof.svg)](https://pypi.org/project/torchprof/)
-
-A minimal dependency library for layer-by-layer profiling of Pytorch models.
+A library for layer-by-layer profiling of Pytorch models.
 
 All metrics are derived using the PyTorch autograd profiler.
+
+(Originally forked from https://github.com/awwong1/torchprof, but almost completely rewritten)
+
+## Improvements
+
+- Can profile non-leaf layers
+- works with region_profiler
+- can filter based on node name or % of total time
 
 ## Quickstart
 
@@ -144,21 +150,6 @@ AlexNet        |                |           |            |
 ```
 
 * [Self CPU Time vs CPU Time](https://software.intel.com/en-us/vtune-amplifier-help-self-time-and-total-time)
-
-## Citation
-
-If this software is useful to your research, I would greatly appreciate a citation in your work.
-
-```tex
-@misc{torchprof,
-  author       = {Alexander William Wong}, 
-  title        = {torchprof},
-  howpublished = {github.com},
-  month        = 4,
-  year         = 2020,
-  note         = {A minimal dependency library for layer-by-layer profiling of Pytorch models.}
-}
-```
 
 ## LICENSE
 [MIT](LICENSE)

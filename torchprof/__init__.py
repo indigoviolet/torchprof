@@ -1,7 +1,7 @@
-from torchprof.profile import Profile
+from torchprof.profile import profile
 
 name = "torchprof"
 
-__all__ = ["Profile"]
-__version__ = "1.1.1"
+__all__ = ["profile"]
 
+__version__ = "1.0.0"

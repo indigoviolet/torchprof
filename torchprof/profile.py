@@ -1,9 +1,125 @@
-import functools
-import torch.autograd.profiler as tprofiler
-from collections import namedtuple, defaultdict, OrderedDict
+from __future__ import annotations
 
-Trace = namedtuple("Trace", ["path", "leaf", "module"])
-Measure = namedtuple("Measure", ["self_cpu_total", "cpu_total", "cuda_total", "occurrences"])
+import re
+from collections import defaultdict
+from contextlib import contextmanager, nullcontext
+from functools import cached_property, wraps
+from typing import (Any, Callable, ClassVar, Dict, Generator, List, Optional,
+                    Tuple, Union)
+
+import attr
+import torch.autograd.profiler as tprofiler
+from more_itertools import partition
+from tabulate import tabulate
+from torch import nn
+from tqdm import tqdm
+
+
+@attr.s(auto_attribs=True)
+class Event:
+    name: str
+    id: int
+    parent_id: Optional[int]
+    children_ids: List[int]
+    self_cpu_time: float
+    self_cuda_time: float
+    cpu_time: float
+    cuda_time: float
+    count: float
+    ancestor_ids: Optional[List[int]] = attr.ib(default=None)
+
+    events_by_id: ClassVar[Dict[int, Event]] = {}
+
+    def __attrs_post_init__(self):
+        Event.register(self)
+
+    @classmethod
+    def register(cls, instance):
+        cls.events_by_id[instance.id] = instance
+
+    @cached_property
+    def parent(self):
+        if self.is_root:
+            return None
+        return Event.events_by_id[self.parent_id]
+
+    @cached_property
+    def label(self):
+        if (
+            not self.is_root
+            and self.name.startswith("torchprof_nn_module")
+            and self.name.startswith(self.parent.name)
+        ):
+            # this adds one char for delimiter
+            return self.name[(len(self.parent.name) + 1) :]
+        else:
+            return self.name.split("::")[-1]
+
+    @cached_property
+    def is_root(self):
+        return self.parent_id is None
+
+    @cached_property
+    def children(self):
+        return [Event.events_by_id[i] for i in self.children_ids]
+
+    @cached_property
+    def ancestors(self):
+        assert self.ancestor_ids is not None
+        return [Event.events_by_id[i] for i in self.ancestor_ids]
+
+    @cached_property
+    def ancestor_names(self):
+        return [e.name for e in self.ancestors]
+
+    @cached_property
+    def path(self):
+        return self.ancestor_names + [self.name]
+
+    @cached_property
+    def path_id(self):
+        return hash(tuple(self.path))
+
+    @classmethod
+    def from_function_event(cls, evt: tprofiler.FunctionEvent) -> Event:
+        return Event(
+            name=evt.name,
+            id=evt.id,
+            parent_id=(evt.cpu_parent.id if evt.cpu_parent is not None else None),
+            children_ids=[e.id for e in evt.cpu_children],
+            self_cpu_time=evt.self_cpu_time_total,
+            self_cuda_time=evt.self_cuda_time_total,
+            cpu_time=evt.cpu_time_total,
+            cuda_time=evt.cuda_time_total,
+            count=evt.count,
+        )
+
+    @classmethod
+    def from_group(cls, evts: List[Event]) -> Event:
+        rep = evts[0]
+        return Event(
+            name=rep.name,
+            id=rep.path_id,
+            parent_id=(rep.parent.path_id if rep.parent_id is not None else None),
+            children_ids=list(set([c.path_id for c in rep.children])),
+            self_cpu_time=cls._get_sum(evts, "self_cpu_time"),
+            self_cuda_time=cls._get_sum(evts, "self_cuda_time"),
+            cpu_time=cls._get_sum(evts, "cpu_time"),
+            cuda_time=cls._get_sum(evts, "cuda_time"),
+            count=cls._get_sum(evts, "count"),
+            ancestor_ids=list(set([a.path_id for a in rep.ancestors])),
+        )
+
+    @classmethod
+    def _get_sum(cls, evts: List[Event], attr_name: str) -> float:
+        return sum(getattr(e, attr_name) for e in evts)
+
+
+@attr.s(auto_attribs=True)
+class Trace:
+    path: Tuple[str]
+    leaf: bool
+    module: nn.Module
 
 
 def walk_modules(module, name="", path=()):
@@ -18,185 +134,199 @@ def walk_modules(module, name="", path=()):
         yield from walk_modules(child_module, name=name, path=path)
 
 
-class Profile(object):
-    """Layer by layer profiling of Pytorch models, using the Pytorch autograd profiler.
-    """
+@contextmanager
+def profile(model: nn.Module, enabled: bool = True, use_cuda: bool = False, paths=None):
+    if not enabled:
+        with nullcontext():
+            yield None
+    else:
+        traces = walk_modules(model)
+        for t in traces:
+            _add_hook_trace(t)
 
-    def __init__(self, model, enabled=True, use_cuda=False, paths=None):
-        self._model = model
-        self.enabled = enabled
-        self.use_cuda = use_cuda
-        self.paths = paths
+        try:
+            with tprofiler.profile(use_cuda=use_cuda) as prof:
+                yield ProfileParser(prof)
+        finally:
+            for t in traces:
+                _remove_hook_trace(t)
 
-        self.entered = False
-        self.exited = False
-        self.traces = ()
-        self.trace_profile_events = defaultdict(list)
 
-    def __enter__(self):
-        if not self.enabled:
-            return self
-        if self.entered:
-            raise RuntimeError("torchprof profiler is not reentrant")
-        self.entered = True
-        self._forwards = {}  # store the original forward functions
-        self.traces = tuple(map(self._hook_trace, walk_modules(self._model)))
-        return self
+def _add_hook_trace(trace: Trace):
+    module = trace.module
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self.enabled:
-            return
-        tuple(map(self._remove_hook_trace, self.traces))
-        del self._forwards  # remove unnecessary forwards
-        self.exited = True
+    module._orig_forward = module.forward
+    name = "torchprof_nn_module::" + ".".join(trace.path)
 
-    def __str__(self):
-        if self.exited:
-            return traces_to_display(
-                self.traces, self.trace_profile_events, paths=self.paths
+    @wraps(module._orig_forward)
+    def _wrapper(*args, **kwargs):
+        with tprofiler.record_function(name):
+            res = module._orig_forward(*args, **kwargs)
+        return res
+
+    module.forward = _wrapper
+
+
+def _remove_hook_trace(trace: Trace):
+    module = trace.module
+    module.forward = module._orig_forward
+    delattr(module, "_orig_forward")
+
+
+@attr.s(auto_attribs=True)
+class ProfileParser:
+    prof: tprofiler.profile = attr.ib(
+        repr=lambda p: f"{p.__class__}<{len(p.function_events)}>"
+    )
+
+    _raw_events: Optional[List[Event]] = attr.ib(init=False, default=None)
+    _events: Optional[List[Event]] = attr.ib(init=False, default=None)
+    _totals: Optional[Dict[str, float]] = attr.ib(init=False, default=None)
+
+    @property
+    def raw_events(self):
+        if self._raw_events is None:
+            self.parse()
+        return self._raw_events
+
+    @property
+    def events(self):
+        if self._events is None:
+            self.parse()
+        return self._events
+
+    @property
+    def totals(self):
+        if self._totals is None:
+            self.parse()
+        return self._totals
+
+    def parse(self):
+        self.prof.function_events.populate_cpu_children()
+
+        events: List[Event] = [
+            Event.from_function_event(e)
+            for e in tqdm(self.prof.function_events, desc="Make Events")
+        ]
+
+        # populate ancestors
+        for evt in tqdm(events, desc="Populate ancestors"):
+            if evt.parent is None:
+                self._populate_ancestors(evt, [])
+
+        # group by path
+        events_by_path: Dict[int, List[Event]] = defaultdict(list)
+        for evt in tqdm(events, desc="Group"):
+            events_by_path[evt.path_id].append(evt)
+
+        # aggregate
+        agg_events = []
+        totals = defaultdict(lambda: 0.0)
+        for group in tqdm(events_by_path.values(), desc="Aggregate"):
+            aevt = Event.from_group(group)
+            agg_events.append(aevt)
+
+            for attr in ["self_cpu_time", "self_cuda_time"]:
+                totals[attr] += getattr(aevt, attr)
+
+        self._raw_events = events
+        self._events = agg_events
+        self._totals = totals
+
+    def _populate_ancestors(self, evt: Event, path: List[int]):
+        evt.ancestor_ids = path
+        for c in evt.children:
+            self._populate_ancestors(c, path + [evt.id])
+
+    def display(
+        self,
+        matching: List[str] = [r"^torchprof_nn_module::", r"^region_profiler::"],
+        min_pct=1,
+        display_empty_rows: bool = False,
+    ):
+
+        matching_res = [re.compile(p) for p in matching]
+
+        filter_fn = (
+            lambda e: any(p.search(e.name) for p in matching_res)
+            if len(matching)
+            else True
+        )
+
+        headers = ["Node", "Self CPU", "CPU", "Self CUDA", "CUDA", "Count"]
+        colalign = ("left", "right", "right", "right", "right")
+        table = []
+
+        cpu_time_total, cuda_time_total = (
+            self.totals["self_cpu_time"],
+            self.totals["self_cuda_time"],
+        )
+        for evt, label in get_tree_labels(self.events, filter_fn):
+
+            formatted_cols = [
+                format_time(evt.self_cpu_time, cpu_time_total, min_pct),
+                format_time(evt.cpu_time, cpu_time_total, min_pct),
+                format_time(evt.self_cuda_time, cuda_time_total, min_pct),
+                format_time(evt.cuda_time, cuda_time_total, min_pct),
+            ]
+
+            if not display_empty_rows and not any(formatted_cols):
+                continue
+
+            table.append(
+                [label, *formatted_cols, evt.count,]
             )
-        return "<unfinished torchprof.profile>"
 
-    def __call__(self, *args, **kwargs):
-        return self._model(*args, **kwargs)
-
-    def _hook_trace(self, trace):
-        [path, leaf, module] = trace
-        if (self.paths is not None and path in self.paths) or (
-            self.paths is None and leaf
-        ):
-            _forward = module.forward
-            self._forwards[path] = _forward
-
-            @functools.wraps(_forward)
-            def wrap_forward(*args, **kwargs):
-                with tprofiler.profile(use_cuda=self.use_cuda) as prof:
-                    res = _forward(*args, **kwargs)
-                event_list = prof.function_events
-                event_list.populate_cpu_children()
-                # each profile call should be contained in its own list
-                self.trace_profile_events[path].append(event_list)
-                return res
-
-            module.forward = wrap_forward
-        return trace
-
-    def _remove_hook_trace(self, trace):
-        [path, leaf, module] = trace
-        if (self.paths is not None and path in self.paths) or (
-            self.paths is None and leaf
-        ):
-            module.forward = self._forwards[path]
-
-    def raw(self):
-        if self.exited:
-            return (self.traces, self.trace_profile_events)
-
-    def display(self, show_events=False):
-        if self.exited:
-            return traces_to_display(
-                self.traces,
-                self.trace_profile_events,
-                show_events=show_events,
-                paths=self.paths,
-            )
-        return "<unfinished torchprof.profile>"
+        print(f"CPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
+        print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
 
 
-def flatten_tree(t, depth=0):
-    flat = []
-    for name, st in t.items():
-        measures = st.pop(None, None)
-        flat.append([depth, name, measures])
-        flat.extend(flatten_tree(st, depth=depth + 1))
-    return flat
+def format_time(time, total, min_pct):
+    pct = time * 100.0 / total
+    if pct >= min_pct:
+        return f"{format_us(time)} ({pct:.0f}%)"
+    else:
+        return ""
 
 
-def traces_to_display(traces, trace_events, show_events=False, paths=None):
-    """Construct human readable output of the profiler traces and events.
-    """
-    tree = OrderedDict()
+US_IN_S = 1000 * 1000
+US_IN_MS = 1000
 
-    for trace in traces:
-        [path, leaf, module] = trace
-        current_tree = tree
-        # unwrap all of the events, in case model is called multiple times
-        events = [te for tevents in trace_events[path] for te in tevents]
-        for depth, name in enumerate(path, 1):
-            if name not in current_tree:
-                current_tree[name] = OrderedDict()
-            if depth == len(path) and (
-                (paths is None and leaf) or (paths is not None and path in paths)
-            ):
-                # tree measurements have key None, avoiding name conflict
-                if show_events:
-                    for event in events:
-                        current_tree[name][event.name] = {
-                            None: Measure(
-                                sum([e.self_cpu_time_total for e in events if e.name == event.name]),
-                                sum([e.cpu_time_total for e in events if e.name == event.name]),
-                                sum([e.cuda_time_total for e in events if e.name == event.name]),
-                                len([e for e in events if e.name == event.name])
-                            )
-                        }
-                else:
-                    current_tree[name][None] = Measure(
-                        sum([e.self_cpu_time_total for e in events]),
-                        sum([e.cpu_time_total for e in events]),
-                        sum([e.cuda_time_total for e in events]),
-                        len(trace_events[path])
-                    )
-            current_tree = current_tree[name]
-    tree_lines = flatten_tree(tree)
 
-    # dt = ('|', '|-- ', '+-- ', ' ') # ascii
-    dt = ("\u2502", "\u251c\u2500\u2500 ", "\u2514\u2500\u2500 ", " ")  # ascii-ex
-    format_lines = []
-    for idx, tree_line in enumerate(tree_lines):
-        depth, name, measures = tree_line
-        self_cpu_time = ""
-        cpu_time = ""
-        cuda_time = ""
-        occurrences = ""
-        if measures:
-            self_cpu_time = tprofiler.format_time(measures.self_cpu_total)
-            cpu_time = tprofiler.format_time(measures.cpu_total)
-            cuda_time = tprofiler.format_time(measures.cuda_total)
-            occurrences = str(measures.occurrences)
-        pre = ""
-        next_depths = [pl[0] for pl in tree_lines[idx + 1 :]]
-        current = True
-        while depth:
-            if current:
-                if depth in next_depths and next_depths[0] >= depth:
-                    pre = dt[1]
-                else:
-                    pre = dt[2]
-            else:
-                if depth in next_depths:
-                    pre = dt[0] + pre
-                else:
-                    pre = dt[3] + pre
-            depth -= 1
-            current = False
-        format_lines.append([pre + name, self_cpu_time, cpu_time, cuda_time, occurrences])
+def format_us(v_us):
+    if v_us > US_IN_S:
+        return f"{(v_us / US_IN_S) :.1f}s"
+    elif v_us > US_IN_MS:
+        return f"{(v_us / US_IN_MS) :.1f}ms"
+    else:
+        return f"{(v_us ) : .1f}us"
 
-    # construct the table
-    heading = ("Module", "Self CPU total", "CPU total", "CUDA total", "Occurrences")
-    max_lens = [max(map(len, col)) for col in zip(*([heading] + format_lines))]
-    # create the heading
-    disp = "{:<{}s}".format(heading[0], max_lens[0]) + " | "
-    disp += "{:>{}s}".format(heading[1], max_lens[1]) + " | "
-    disp += "{:>{}s}".format(heading[2], max_lens[2]) + " | "
-    disp += "{:>{}s}".format(heading[3], max_lens[3]) + " | "
-    disp += "{:>{}s}".format(heading[4], max_lens[4]) + "\n"
-    disp += "-|-".join(["-" * mlen for mlen in max_lens]) + "\n"
-    for line in format_lines:
-        label, self_cpu_time, cpu_time, cuda_time, occurrences = line
-        disp += "{:<{}s}".format(label, max_lens[0]) + " | "
-        disp += "{:>{}s}".format(self_cpu_time, max_lens[1]) + " | "
-        disp += "{:>{}s}".format(cpu_time, max_lens[2]) + " | "
-        disp += "{:>{}s}".format(cuda_time, max_lens[3]) + " | "
-        disp += "{:>{}s}".format(occurrences, max_lens[4]) + "\n"
 
-    return disp
+def get_tree_labels(
+    events: List[Event], filter_fn: Callable[[Event], bool]
+) -> Generator[Tuple[Event, str], None, None]:
+
+    for e in events:
+        if e.is_root:
+            yield (e, e.label)
+            yield from _tree_labels(e, "", filter_fn)
+
+
+def _tree_labels(
+    root: Event, stems: str, filter_fn: Callable[[Event], bool]
+) -> Generator[Tuple[Event, str], None, None]:
+    vert_stem, middle_branch, end_branch, space = (
+        "\u2502",  # │
+        "\u251c\u2500\u2500",  # ├──
+        "\u2514\u2500\u2500",  # └──
+        " ",
+    )
+    children = [c for c in root.children if filter_fn(c)]
+    num_children = len(children)
+    for i, c in enumerate(children):
+        last_child = i == num_children - 1
+        branch = end_branch if last_child else middle_branch
+        yield (c, stems + branch + c.label)
+
+        desc_stems = stems + (space if last_child else vert_stem) + space
+        yield from _tree_labels(c, desc_stems, filter_fn)

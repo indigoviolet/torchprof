@@ -1,0 +1,17 @@
+[tool]
+[tool.poetry]
+name = "torchprof"
+version = "1.1.1"
+description = "Measure neural network device specific metrics (latency, flops, etc.)"
+license = "MIT"
+classifiers = ["License :: OSI Approved :: MIT License", "Operating System :: OS Independent", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.5", "Programming Language :: Python :: 3.6", "Programming Language :: Python :: 3.7", "Programming Language :: Python :: 3.8"]
+homepage = "https://github.com/indigoviolet/torchprof"
+authors = ["Venky Iyer <indigoviolet@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.5"
+attr = "^0.3.1"
+tqdm = "^4.51.0"
+tabulate = "^0.8.7"
+more-itertools = "^8.6.0"
