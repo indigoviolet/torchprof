@@ -1,156 +1,179 @@
 * torchprof
+
 A library for layer-by-layer profiling of Pytorch models.
 
 All metrics are derived using the PyTorch autograd profiler.
 
-(Originally forked from [[https://github.com/awwong1/torchprof][awwong1]], but almost completely rewritten by @indigoviolet)
+Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it has been completely rewritten since.
 
 ** Improvements
 
 - Can profile non-leaf layers
-- works with [[https://github.com/indigoviolet/region_profiler][region_profiler]]
-- can filter based on node name or % of total time
+- works with [[https://github.com/indigoviolet/region_profiler][region_profiler]] to annotate arbitrary regions/functions and profile them
+- filter based on node name or % of total time
+- sorting
+
+** Demo
+
+[[file:demo.ipynb][Notebook]]
 
 ** Quickstart
 
 ~=pip install torchprof=~
 
 #+begin_src python
-  import torch
-  import torchvision
-  import torchprof
+import torch
+import torchvision
+import torchprof
+model = torchvision.models.alexnet(pretrained=False).cuda()
+x = torch.rand([1, 3, 224, 224]).cuda()
 
-  model = torchvision.models.alexnet(pretrained=False).cuda()
-  x = torch.rand([1, 3, 224, 224]).cuda()
+with torchprof.profile(model, use_cuda=True) as prof:
+    _ = model(x)
 
-  with torchprof.Profile(model, use_cuda=True) as prof:
-      model(x)
-
-  print(prof.display(show_events=False)) # equivalent to `print(prof)` and `print(prof.display())`
+prof.display(min_pct=0)
 #+end_src
 
 #+begin_example
-  Module         | Self CPU total | CPU total | CUDA total | Occurrences
-  ---------------|----------------|-----------|------------|------------
-  AlexNet        |                |           |            |
-  ├── features   |                |           |            |
-  │├── 0         |        1.671ms |   6.589ms |    6.701ms |           1
-  │├── 1         |       62.430us |  62.430us |   63.264us |           1
-  │├── 2         |       62.909us | 109.948us |  112.640us |           1
-  │├── 3         |      225.389us | 858.376us |    1.814ms |           1
-  │├── 4         |       18.999us |  18.999us |   19.456us |           1
-  │├── 5         |       29.560us |  52.720us |   54.272us |           1
-  │├── 6         |      136.959us | 511.216us |  707.360us |           1
-  │├── 7         |       18.480us |  18.480us |   18.624us |           1
-  │├── 8         |       84.380us | 300.700us |  590.688us |           1
-  │├── 9         |       18.249us |  18.249us |   17.632us |           1
-  │├── 10        |       81.289us | 289.946us |  470.016us |           1
-  │├── 11        |       17.850us |  17.850us |   18.432us |           1
-  │└── 12        |       29.350us |  52.260us |   52.288us |           1
-  ├── avgpool    |       41.840us |  70.840us |   76.832us |           1
-  └── classifier |                |           |            |
-   ├── 0         |       66.400us | 122.110us |  125.920us |           1
-   ├── 1         |      293.658us | 293.658us |  664.704us |           1
-   ├── 2         |       17.600us |  17.600us |   18.432us |           1
-   ├── 3         |       27.920us |  49.030us |   51.168us |           1
-   ├── 4         |       40.590us |  40.590us |  208.672us |           1
-   ├── 5         |       17.570us |  17.570us |   18.432us |           1
-   └── 6         |       40.489us |  40.489us |   81.920us |           1
-#+end_example
++---------------+---------------+---------------+-------------+---------------+---------+
+| Node          |      Self CPU |           CPU |   Self CUDA |          CUDA |   Count |
+|---------------+---------------+---------------+-------------+---------------+---------|
+| AlexNet       |   92.1us (3%) |   3.0ms (99%) | 42.0us (0%) | 11.6ms (100%) |       1 |
+| ├──classifier |  136.9us (4%) | 681.1us (22%) | 29.7us (0%) |   7.1ms (61%) |       1 |
+| │ ├──1        |   33.3us (1%) |  102.3us (3%) |  4.1us (0%) |   4.5ms (39%) |       1 |
+| │ ├──4        |   26.9us (1%) |   77.8us (3%) |  3.1us (0%) |   1.9ms (16%) |       1 |
+| │ ├──6        |   25.8us (1%) |   74.2us (2%) |  3.1us (0%) |  506.9us (4%) |       1 |
+| │ ├──2        |   13.9us (0%) |   36.2us (1%) |  4.1us (0%) |   25.6us (0%) |       1 |
+| │ ├──0        |   22.0us (1%) |   69.6us (2%) |  4.1us (0%) |   24.6us (0%) |       1 |
+| │ ├──3        |   18.9us (1%) |   57.5us (2%) |  4.1us (0%) |   19.5us (0%) |       1 |
+| │ └──5        |   13.7us (0%) |   36.1us (1%) |  6.1us (0%) |   18.4us (0%) |       1 |
+| ├──features   | 312.1us (10%) |   2.1ms (69%) | 69.0us (1%) |   4.4ms (37%) |       1 |
+| │ ├──3        |   23.0us (1%) |  231.4us (8%) |  4.1us (0%) |   1.2ms (10%) |       1 |
+| │ ├──8        |   21.2us (1%) |  130.6us (4%) |  4.1us (0%) |  809.0us (7%) |       1 |
+| │ ├──6        |   26.5us (1%) | 291.8us (10%) |  4.1us (0%) |  636.9us (5%) |       1 |
+| │ ├──10       |   45.1us (1%) |  224.3us (7%) |  4.1us (0%) |  576.5us (5%) |       1 |
+| │ ├──0        |   28.4us (1%) |  212.6us (7%) | 20.0us (0%) |  548.2us (5%) |       1 |
+| │ ├──2        |   21.3us (1%) |   69.6us (2%) |  4.1us (0%) |   82.9us (1%) |       1 |
+| │ ├──5        |   17.5us (1%) |   58.8us (2%) |  4.1us (0%) |   65.5us (1%) |       1 |
+| │ ├──1        |   18.2us (1%) |   47.5us (2%) |  3.1us (0%) |   59.4us (1%) |       1 |
+| │ ├──4        |   16.1us (1%) |   39.9us (1%) |  4.1us (0%) |   51.2us (0%) |       1 |
+| │ ├──9        |   33.5us (1%) |   58.0us (2%) |  4.1us (0%) |   32.8us (0%) |       1 |
+| │ ├──12       |   42.3us (1%) |  113.4us (4%) |  3.1us (0%) |   31.7us (0%) |       1 |
+| │ ├──7        |   14.7us (0%) |   36.4us (1%) |  3.1us (0%) |   20.5us (0%) |       1 |
+| │ └──11       |   23.5us (1%) |   68.9us (2%) |  4.1us (0%) |   19.5us (0%) |       1 |
+| └──avgpool    |   27.5us (1%) |   81.9us (3%) |  4.1us (0%) |   77.8us (1%) |       1 |
+| aten::zeros   |    9.7us (0%) |   23.7us (1%) | 12.4us (0%) |   23.2us (0%) |       1 |
++---------------+---------------+---------------+-------------+---------------+---------+
 
-To see the low level operations that occur within each layer, print the
-contents of =prof.display(show_events=True)=.
+** Filtering
 
-#+begin_example
-  Module                        | Self CPU total | CPU total | CUDA total | Occurrences
-  ------------------------------|----------------|-----------|------------|------------
-  AlexNet                       |                |           |            |
-  ├── features                  |                |           |            |
-  │├── 0                        |                |           |            |
-  ││├── conv2d                  |       13.370us |   1.671ms |    1.698ms |           1
-  ││├── convolution             |       12.730us |   1.658ms |    1.685ms |           1
-  ││├── _convolution            |       30.660us |   1.645ms |    1.673ms |           1
-  ││├── contiguous              |        6.970us |   6.970us |    7.136us |           1
-  ││└── cudnn_convolution       |        1.608ms |   1.608ms |    1.638ms |           1
-  │├── 1                        |                |           |            |
-  ││└── relu_                   |       62.430us |  62.430us |   63.264us |           1
-  │├── 2                        |                |           |            |
-  ││├── max_pool2d              |       15.870us |  62.909us |   63.488us |           1
-  ││└── max_pool2d_with_indices |       47.039us |  47.039us |   49.152us |           1
-  ...
-#+end_example
+*** On % of total time
 
-The original [[https://pytorch.org/docs/stable/autograd.html#torch.autograd.profiler.profile][Pytorch EventList]] can be returned by calling =raw()= on the profile instance.
+~prof.display(min_pct=1)~
 
-#+begin_src python
-  trace, event_lists_dict = prof.raw()
-  print(trace[2])
-  # Trace(path=('AlexNet', 'features', '0'), leaf=True, module=Conv2d(3, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2)))
+#+BEGIN_example
++---------------+--------------+--------------+-------------+---------------+---------+
+| Node          |     Self CPU |          CPU |   Self CUDA |          CUDA |   Count |
+|---------------+--------------+--------------+-------------+---------------+---------|
+| AlexNet       | 109.8us (2%) | 6.1ms (100%) |             | 12.5ms (100%) |       1 |
+| ├──classifier | 143.5us (2%) |  2.9ms (47%) |             |   7.2ms (57%) |       1 |
+| │ ├──1        |              |  2.2ms (37%) |             |   4.7ms (37%) |       1 |
+| │ ├──4        |              |  83.4us (1%) |             |   1.9ms (15%) |       1 |
+| │ ├──6        |              |  74.2us (1%) |             |  499.7us (4%) |       1 |
+| │ ├──0        |              | 100.9us (2%) |             |               |       1 |
+| ├──features   | 265.2us (4%) |  3.0ms (49%) |             |   5.2ms (41%) |       1 |
+| │ ├──0        |  77.4us (1%) |  1.4ms (23%) |             |   1.6ms (13%) |       1 |
+| │ ├──3        |              | 243.4us (4%) |             |    1.1ms (9%) |       1 |
+| │ ├──8        |              | 132.5us (2%) |             |  775.2us (6%) |       1 |
+| │ ├──6        |              | 166.3us (3%) |             |  611.3us (5%) |       1 |
+| │ ├──10       |              | 127.4us (2%) |             |  544.8us (4%) |       1 |
+| │ ├──2        |              | 107.7us (2%) |             |               |       1 |
+| │ ├──1        |              |  77.4us (1%) |             |               |       1 |
+| └──avgpool    |              |  85.9us (1%) |             |               |       1 |
++---------------+--------------+--------------+-------------+---------------+---------+
 
-  print(event_lists_dict[trace[2].path][0])
-#+end_src
+#+END_example
 
-#+begin_example
-  ---------------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  -----------------------------------
-  Name                   Self CPU total %  Self CPU total   CPU total %      CPU total        CPU time avg     CUDA total %     CUDA total       CUDA time avg    Number of Calls  Input Shapes
-  ---------------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  -----------------------------------
-  conv2d                 0.80%            13.370us         100.00%          1.671ms          1.671ms          25.34%           1.698ms          1.698ms          1                []
-  convolution            0.76%            12.730us         99.20%           1.658ms          1.658ms          25.15%           1.685ms          1.685ms          1                []
-  _convolution           1.83%            30.660us         98.44%           1.645ms          1.645ms          24.97%           1.673ms          1.673ms          1                []
-  contiguous             0.42%            6.970us          0.42%            6.970us          6.970us          0.11%            7.136us          7.136us          1                []
-  cudnn_convolution      96.19%           1.608ms          96.19%           1.608ms          1.608ms          24.44%           1.638ms          1.638ms          1                []
-  ---------------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  -----------------------------------
-  Self CPU time total: 1.671ms
-  CUDA time total: 6.701ms
-#+end_example
+*** Show low level events (filtering on node name)
 
-Layers can be selected for individually using the optional =paths=
-kwarg. Profiling is ignored for all other layers.
+Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ regions by default)
 
-#+begin_src python
-  model = torchvision.models.alexnet(pretrained=False)
-  x = torch.rand([1, 3, 224, 224])
-
-  # Layer does not have to be a leaf layer
-  paths = [("AlexNet", "features", "3"), ("AlexNet", "classifier")]
-
-  with torchprof.Profile(model, paths=paths) as prof:
-      model(x)
-
-  print(prof)
-#+end_src
+~prof.display(min_pct=1, filter=[])~
 
 #+begin_example
-  Module         | Self CPU total | CPU total | CUDA total | Occurrences
-  ---------------|----------------|-----------|------------|------------
-  AlexNet        |                |           |            |
-  ├── features   |                |           |            |
-  │├── 0         |                |           |            |
-  │├── 1         |                |           |            |
-  │├── 2         |                |           |            |
-  │├── 3         |        3.189ms |  12.717ms |    0.000us |           1
-  │├── 4         |                |           |            |
-  │├── 5         |                |           |            |
-  │├── 6         |                |           |            |
-  │├── 7         |                |           |            |
-  │├── 8         |                |           |            |
-  │├── 9         |                |           |            |
-  │├── 10        |                |           |            |
-  │├── 11        |                |           |            |
-  │└── 12        |                |           |            |
-  ├── avgpool    |                |           |            |
-  └── classifier |       13.403ms |  14.011ms |    0.000us |           1
-   ├── 0         |                |           |            |
-   ├── 1         |                |           |            |
-   ├── 2         |                |           |            |
-   ├── 3         |                |           |            |
-   ├── 4         |                |           |            |
-   ├── 5         |                |           |            |
-   └── 6         |                |           |            |
++----------------------------------------+--------------+---------------+--------------+---------------+---------+
+| Node                                   |     Self CPU |           CPU |    Self CUDA |          CUDA |   Count |
+|----------------------------------------+--------------+---------------+--------------+---------------+---------|
+| AlexNet                                | 118.3us (4%) |   2.9ms (99%) |              | 10.7ms (100%) |       1 |
+| ├──classifier                          | 137.7us (5%) | 682.0us (23%) |              |   6.9ms (65%) |       1 |
+| │ ├──1                                 |  32.8us (1%) |  102.5us (3%) |              |   4.4ms (41%) |       1 |
+| │ │ ├──aten::addmm                     |  48.7us (2%) |   56.4us (2%) |  4.4ms (41%) |   4.4ms (41%) |       1 |
+| │ ├──4                                 |              |   76.8us (3%) |              |   1.9ms (18%) |       1 |
+| │ │ ├──aten::addmm                     |  34.1us (1%) |   40.7us (1%) |  1.9ms (18%) |   1.9ms (18%) |       1 |
+| │ ├──6                                 |              |   74.0us (3%) |              |  498.7us (5%) |       1 |
+| │ │ ├──aten::addmm                     |  33.0us (1%) |   39.5us (1%) | 494.6us (5%) |  494.6us (5%) |       1 |
+| │ ├──aten::zeros                       |  37.8us (1%) |   90.8us (3%) |              |               |       7 |
+| │ │ ├──aten::zero_                     |              |   43.6us (1%) |              |               |       7 |
+| │ ├──0                                 |              |   71.4us (2%) |              |               |       1 |
+| │ │ ├──aten::dropout                   |              |   47.4us (2%) |              |               |       1 |
+| │ │ │ └──aten::_fused_dropout          |  31.1us (1%) |   40.6us (1%) |              |               |       1 |
+| │ ├──3                                 |              |   57.2us (2%) |              |               |       1 |
+| │ │ ├──aten::dropout                   |              |   38.0us (1%) |              |               |       1 |
+| │ │ │ └──aten::_fused_dropout          |              |   32.5us (1%) |              |               |       1 |
+| │ ├──5                                 |              |   35.0us (1%) |              |               |       1 |
+| │ ├──2                                 |              |   35.7us (1%) |              |               |       1 |
+| ├──features                            | 273.9us (9%) |   2.0ms (67%) |              |   3.6ms (33%) |       1 |
+| │ ├──3                                 |              |  135.9us (5%) |              |  745.5us (7%) |       1 |
+| │ │ ├──aten::conv2d                    |              |  112.0us (4%) |              |  742.4us (7%) |       1 |
+| │ │ │ └──aten::convolution             |              |  106.8us (4%) |              |  738.3us (7%) |       1 |
+...
 #+end_example
 
-- [[https://software.intel.com/en-us/vtune-amplifier-help-self-time-and-total-time][Self CPU Time vs CPU Time]]
+** Sorting
+
+~prof.display(sort_by=["self_cuda_time"], min_pct=0)~
+
+#+BEGIN_example
+
+
++---------------+--------------+--------------+-------------+---------------+---------+
+| Node          |     Self CPU |          CPU |   Self CUDA |          CUDA |   Count |
+|---------------+--------------+--------------+-------------+---------------+---------|
+| AlexNet       | 110.4us (2%) | 6.1ms (100%) | 39.3us (0%) | 12.6ms (100%) |       1 |
+| ├──features   | 265.5us (4%) |  3.0ms (48%) | 67.7us (1%) |   5.2ms (41%) |       1 |
+| │ ├──0        |  79.8us (1%) |  1.4ms (23%) | 40.4us (0%) |   1.6ms (13%) |       1 |
+| │ ├──10       |  19.9us (0%) | 127.8us (2%) |  4.1us (0%) |  548.9us (4%) |       1 |
+| │ ├──5        |  17.3us (0%) |  57.7us (1%) |  4.1us (0%) |   59.4us (0%) |       1 |
+| │ ├──12       |  16.8us (0%) |  56.7us (1%) |  4.1us (0%) |   28.7us (0%) |       1 |
+| │ ├──2        |  44.0us (1%) | 107.3us (2%) |  4.1us (0%) |   74.8us (1%) |       1 |
+| │ ├──11       |  13.8us (0%) |  34.7us (1%) |  4.1us (0%) |   19.5us (0%) |       1 |
+| │ ├──3        |  24.2us (0%) | 238.5us (4%) |  4.1us (0%) |    1.1ms (9%) |       1 |
+| │ ├──6        |  22.1us (0%) | 169.6us (3%) |  4.1us (0%) |  612.4us (5%) |       1 |
+| │ ├──9        |  13.9us (0%) |  34.9us (1%) |  4.1us (0%) |   17.4us (0%) |       1 |
+| │ ├──4        |  14.9us (0%) |  37.2us (1%) |  3.1us (0%) |   45.1us (0%) |       1 |
+| │ ├──1        |  28.7us (0%) |  76.7us (1%) |  3.1us (0%) |   58.4us (0%) |       1 |
+| │ ├──7        |  14.5us (0%) |  35.9us (1%) |  3.1us (0%) |   32.8us (0%) |       1 |
+| │ └──8        |  20.7us (0%) | 132.3us (2%) |  3.1us (0%) |  791.6us (6%) |       1 |
+| ├──classifier | 144.0us (2%) |  2.9ms (47%) | 27.6us (0%) |   7.2ms (57%) |       1 |
+| │ ├──2        |  16.0us (0%) |  39.8us (1%) |  4.1us (0%) |   16.4us (0%) |       1 |
+| │ ├──1        |  62.7us (1%) |  2.3ms (37%) |  4.1us (0%) |   4.7ms (37%) |       1 |
+| │ ├──6        |  26.8us (0%) |  76.0us (1%) |  4.1us (0%) |  503.8us (4%) |       1 |
+| │ ├──0        |  35.9us (1%) | 102.4us (2%) |  4.1us (0%) |   22.5us (0%) |       1 |
+| │ ├──4        |  28.7us (0%) |  81.9us (1%) |  3.1us (0%) |   1.9ms (15%) |       1 |
+| │ ├──5        |  14.4us (0%) |  35.9us (1%) |  3.1us (0%) |   15.4us (0%) |       1 |
+| │ └──3        |  20.1us (0%) |  60.8us (1%) |  3.1us (0%) |   17.4us (0%) |       1 |
+| └──avgpool    |  38.5us (1%) |  79.9us (1%) |  4.1us (0%) |   67.6us (1%) |       1 |
+| aten::zeros   |   9.7us (0%) |  29.0us (0%) | 11.6us (0%) |   28.5us (0%) |       1 |
++---------------+--------------+--------------+-------------+---------------+---------+
+
+
+#+END_example
 
 ** LICENSE
 
 [[file:LICENSE][MIT]]
+
+** TODO
+
+- [ ] fix up tests
+- [ ] add memory profiling

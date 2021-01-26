@@ -2,16 +2,22 @@
 [tool.poetry]
 name = "torchprof"
 version = "1.1.1"
-description = "Measure neural network device specific metrics (latency, flops, etc.)"
+description = "Profile PyTorch models"
 license = "MIT"
 classifiers = ["License :: OSI Approved :: MIT License", "Operating System :: OS Independent", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.5", "Programming Language :: Python :: 3.6", "Programming Language :: Python :: 3.7", "Programming Language :: Python :: 3.8"]
 homepage = "https://github.com/indigoviolet/torchprof"
 authors = ["Venky Iyer <indigoviolet@gmail.com>"]
-readme = "README.md"
+readme = "README.org"
 
 [tool.poetry.dependencies]
-python = ">=3.5"
+python = ">=3.8"
 attr = "^0.3.1"
 tqdm = "^4.51.0"
 tabulate = "^0.8.7"
 more-itertools = "^8.6.0"
+
+[tool.poetry.dev-dependencies]
+jupyter = "^1.0.0"
+mypy = "^0.800"
+torch = "^1.7.1"
+torchvision = "^0.8.2"

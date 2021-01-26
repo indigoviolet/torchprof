@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from functools import cached_property, wraps
-from typing import Callable, ClassVar, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, ClassVar, Dict, Generator, List, Optional, Tuple
 
 import attr
 import torch.autograd.profiler as tprofiler
@@ -39,6 +39,7 @@ class Event:
     def parent(self):
         if self.is_root:
             return None
+        assert self.parent_id is not None
         return Event.events_by_id[self.parent_id]
 
     @cached_property
@@ -134,7 +135,9 @@ def walk_modules(module, name="", path=()):
 
 
 @contextmanager
-def profile(model: nn.Module, enabled: bool = True, use_cuda: bool = False, paths=None):
+def profile(
+    model: nn.Module, enabled: bool = True, use_cuda: bool = False, paths=None
+) -> Generator[Optional[ProfileParser], None, None]:
     if not enabled:
         with nullcontext():
             yield None
@@ -151,8 +154,14 @@ def profile(model: nn.Module, enabled: bool = True, use_cuda: bool = False, path
                 _remove_hook_trace(t)
 
 
+# Pytorch modules don't play nice with mypy. All attributes are assumed to be
+# Tensor|Module, but this is not true. This is a quick way to eliminate type
+# errors for Pytorch nn.Module
+PytorchModule = Any
+
+
 def _add_hook_trace(trace: Trace):
-    module = trace.module
+    module: PytorchModule = trace.module
 
     module._orig_forward = module.forward
     name = "torchprof_nn_module::" + ".".join(trace.path)
@@ -167,7 +176,7 @@ def _add_hook_trace(trace: Trace):
 
 
 def _remove_hook_trace(trace: Trace):
-    module = trace.module
+    module: PytorchModule = trace.module
     module.forward = module._orig_forward
     delattr(module, "_orig_forward")
 
@@ -201,11 +210,12 @@ class ProfileParser:
         return self._totals
 
     def parse(self):
-        self.prof.function_events.populate_cpu_children()
+        function_events: tprofiler.EventList = self.prof.function_events  # type: ignore[assignment]
+        function_events.populate_cpu_children()
 
         events: List[Event] = [
             Event.from_function_event(e)
-            for e in tqdm(self.prof.function_events, desc="Make Events")
+            for e in tqdm(function_events, desc="Make Events")
         ]
 
         # populate ancestors
@@ -220,13 +230,13 @@ class ProfileParser:
 
         # aggregate
         agg_events = []
-        totals = defaultdict(lambda: 0.0)
+        totals: Dict[str, float] = defaultdict(lambda: 0.0)
         for group in tqdm(events_by_path.values(), desc="Aggregate"):
             aevt = Event.from_group(group)
             agg_events.append(aevt)
 
-            for attr in ["self_cpu_time", "self_cuda_time"]:
-                totals[attr] += getattr(aevt, attr)
+            for a in ["self_cpu_time", "self_cuda_time"]:
+                totals[a] += getattr(aevt, a)
 
         self._raw_events = events
         self._events = agg_events
@@ -239,18 +249,16 @@ class ProfileParser:
 
     def display(
         self,
-        matching: List[str] = [r"^torchprof_nn_module::", r"^region_profiler::"],
+        filter: List[str] = [r"^torchprof_nn_module::", r"^region_profiler::"],
         min_pct=1,
         display_empty_rows: bool = False,
         sort_by: List[str] = ["cuda_time"],
     ):
 
-        matching_res = [re.compile(p) for p in matching]
+        filter_res = [re.compile(p) for p in filter]
 
         filter_fn = (
-            lambda e: any(p.search(e.name) for p in matching_res)
-            if len(matching)
-            else True
+            lambda e: any(p.search(e.name) for p in filter_res) if len(filter) else True
         )
 
         sort_key = lambda e: tuple(getattr(e, s) for s in sort_by)
