@@ -4,12 +4,10 @@ import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from functools import cached_property, wraps
-from typing import (Any, Callable, ClassVar, Dict, Generator, List, Optional,
-                    Tuple, Union)
+from typing import Callable, ClassVar, Dict, Generator, List, Optional, Tuple
 
 import attr
 import torch.autograd.profiler as tprofiler
-from more_itertools import partition
 from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
@@ -53,7 +51,8 @@ class Event:
             # this adds one char for delimiter
             return self.name[(len(self.parent.name) + 1) :]
         else:
-            return self.name.split("::")[-1]
+            parts = self.name.split("::")
+            return self.name if parts[0] == "aten" else parts[-1]
 
     @cached_property
     def is_root(self):
@@ -243,6 +242,7 @@ class ProfileParser:
         matching: List[str] = [r"^torchprof_nn_module::", r"^region_profiler::"],
         min_pct=1,
         display_empty_rows: bool = False,
+        sort_by: List[str] = ["cuda_time"],
     ):
 
         matching_res = [re.compile(p) for p in matching]
@@ -253,6 +253,8 @@ class ProfileParser:
             else True
         )
 
+        sort_key = lambda e: tuple(getattr(e, s) for s in sort_by)
+
         headers = ["Node", "Self CPU", "CPU", "Self CUDA", "CUDA", "Count"]
         colalign = ("left", "right", "right", "right", "right")
         table = []
@@ -261,7 +263,9 @@ class ProfileParser:
             self.totals["self_cpu_time"],
             self.totals["self_cuda_time"],
         )
-        for evt, label in get_tree_labels(self.events, filter_fn):
+        for evt, label in tqdm(
+            get_tree_labels(self.events, filter_fn, sort_key), desc="Make rows"
+        ):
 
             formatted_cols = [
                 format_time(evt.self_cpu_time, cpu_time_total, min_pct),
@@ -274,7 +278,11 @@ class ProfileParser:
                 continue
 
             table.append(
-                [label, *formatted_cols, evt.count,]
+                [
+                    label,
+                    *formatted_cols,
+                    evt.count,
+                ]
             )
 
         print(f"CPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
@@ -303,17 +311,23 @@ def format_us(v_us):
 
 
 def get_tree_labels(
-    events: List[Event], filter_fn: Callable[[Event], bool]
+    events: List[Event],
+    filter_fn: Callable[[Event], bool],
+    sort_key: Callable[[Event], Tuple[int, ...]],
 ) -> Generator[Tuple[Event, str], None, None]:
 
-    for e in events:
-        if e.is_root:
-            yield (e, e.label)
-            yield from _tree_labels(e, "", filter_fn)
+    roots = sorted([e for e in events if e.is_root], key=sort_key, reverse=True)
+
+    for e in roots:
+        yield (e, e.label)
+        yield from _tree_labels(e, " ", filter_fn, sort_key)
 
 
 def _tree_labels(
-    root: Event, stems: str, filter_fn: Callable[[Event], bool]
+    root: Event,
+    stems: str,
+    filter_fn: Callable[[Event], bool],
+    sort_key: Callable[[Event], Tuple[int, ...]],
 ) -> Generator[Tuple[Event, str], None, None]:
     vert_stem, middle_branch, end_branch, space = (
         "\u2502",  # │
@@ -321,7 +335,9 @@ def _tree_labels(
         "\u2514\u2500\u2500",  # └──
         " ",
     )
-    children = [c for c in root.children if filter_fn(c)]
+    children = sorted(
+        [c for c in root.children if filter_fn(c)], key=sort_key, reverse=True
+    )
     num_children = len(children)
     for i, c in enumerate(children):
         last_child = i == num_children - 1
@@ -329,4 +345,4 @@ def _tree_labels(
         yield (c, stems + branch + c.label)
 
         desc_stems = stems + (space if last_child else vert_stem) + space
-        yield from _tree_labels(c, desc_stems, filter_fn)
+        yield from _tree_labels(c, desc_stems, filter_fn, sort_key)
