@@ -64,14 +64,14 @@ prof.display(min_pct=0)
 | └──avgpool    |   27.5us (1%) |   81.9us (3%) |  4.1us (0%) |   77.8us (1%) |       1 |
 | aten::zeros   |    9.7us (0%) |   23.7us (1%) | 12.4us (0%) |   23.2us (0%) |       1 |
 +---------------+---------------+---------------+-------------+---------------+---------+
-
+#+end_example
 ** Filtering
 
 *** On % of total time
 
 ~prof.display(min_pct=1)~
 
-#+BEGIN_example
+#+begin_example
 +---------------+--------------+--------------+-------------+---------------+---------+
 | Node          |     Self CPU |          CPU |   Self CUDA |          CUDA |   Count |
 |---------------+--------------+--------------+-------------+---------------+---------|
@@ -91,8 +91,7 @@ prof.display(min_pct=0)
 | │ ├──1        |              |  77.4us (1%) |             |               |       1 |
 | └──avgpool    |              |  85.9us (1%) |             |               |       1 |
 +---------------+--------------+--------------+-------------+---------------+---------+
-
-#+END_example
+#+end_example
 
 *** Show low level events (filtering on node name)
 
@@ -133,7 +132,7 @@ Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ reg
 
 ~prof.display(sort_by=["self_cuda_time"], min_pct=0)~
 
-#+BEGIN_example
+#+begin_example
 
 
 +---------------+--------------+--------------+-------------+---------------+---------+
@@ -165,9 +164,7 @@ Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ reg
 | └──avgpool    |  38.5us (1%) |  79.9us (1%) |  4.1us (0%) |   67.6us (1%) |       1 |
 | aten::zeros   |   9.7us (0%) |  29.0us (0%) | 11.6us (0%) |   28.5us (0%) |       1 |
 +---------------+--------------+--------------+-------------+---------------+---------+
-
-
-#+END_example
+#+end_example
 
 ** LICENSE
 
