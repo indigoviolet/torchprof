@@ -114,21 +114,27 @@ class Event:
     def _get_sum(cls, evts: List[Event], attr_name: str) -> float:
         return sum(getattr(e, attr_name) for e in evts)
 
+    def matches(self, res: List[re.Pattern]) -> bool:
+        if not len(res):
+            return True
+        return any(p.search(self.name) for p in res)
+
 
 @attr.s(auto_attribs=True)
 class Trace:
     path: Tuple[str]
     leaf: bool
     module: nn.Module
+    name: str
 
 
-def walk_modules(module, name="", path=()):
+def walk_modules(module, name="", path=()) -> Generator[Trace, None, None]:
     """Generator. Walks through a PyTorch Module and outputs Trace tuples"""
     if not name:
         name = module.__class__.__name__
     named_children = list(module.named_children())
     path = path + (name,)
-    yield Trace(path, len(named_children) == 0, module)
+    yield Trace(path, len(named_children) == 0, module, name)
     # recursively walk into all submodules
     for name, child_module in named_children:
         yield from walk_modules(child_module, name=name, path=path)
@@ -142,15 +148,14 @@ def profile(
         with nullcontext():
             yield None
     else:
-        traces = walk_modules(model)
-        for t in traces:
-            _add_hook_trace(t)
-
+        traces = list(walk_modules(model))
         try:
+            for t in tqdm(traces, desc="Adding traces"):
+                _add_hook_trace(t)
             with tprofiler.profile(use_cuda=use_cuda) as prof:
                 yield ProfileParser(prof)
         finally:
-            for t in traces:
+            for t in tqdm(traces, desc="Removing traces"):
                 _remove_hook_trace(t)
 
 
@@ -162,6 +167,8 @@ PytorchModule = Any
 
 def _add_hook_trace(trace: Trace):
     module: PytorchModule = trace.module
+    if hasattr(module, "_orig_forward"):
+        return
 
     module._orig_forward = module.forward
     name = "torchprof_nn_module::" + ".".join(trace.path)
@@ -177,8 +184,9 @@ def _add_hook_trace(trace: Trace):
 
 def _remove_hook_trace(trace: Trace):
     module: PytorchModule = trace.module
-    module.forward = module._orig_forward
-    delattr(module, "_orig_forward")
+    if hasattr(module, "_orig_forward"):
+        module.forward = module._orig_forward
+        delattr(module, "_orig_forward")
 
 
 @attr.s(auto_attribs=True)
@@ -253,12 +261,13 @@ class ProfileParser:
         min_pct=1,
         display_empty_rows: bool = False,
         sort_by: List[str] = ["cuda_time"],
+        filter_roots: bool = False,
     ):
 
         filter_res = [re.compile(p) for p in filter]
 
-        filter_fn = (
-            lambda e: any(p.search(e.name) for p in filter_res) if len(filter) else True
+        filter_fn = lambda e: (
+            True if (not filter_roots and e.is_root) else e.matches(filter_res)
         )
 
         sort_key = lambda e: tuple(getattr(e, s) for s in sort_by)
@@ -293,7 +302,7 @@ class ProfileParser:
                 ]
             )
 
-        print(f"CPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
+        print(f"\n\nCPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
 
 
@@ -324,7 +333,9 @@ def get_tree_labels(
     sort_key: Callable[[Event], Tuple[int, ...]],
 ) -> Generator[Tuple[Event, str], None, None]:
 
-    roots = sorted([e for e in events if e.is_root], key=sort_key, reverse=True)
+    roots = sorted(
+        [e for e in events if filter_fn(e) and e.is_root], key=sort_key, reverse=True
+    )
 
     for e in roots:
         yield (e, e.label)
