@@ -12,6 +12,8 @@ from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
 
+NN_MODULE_PREFIX = "torch_nn_module::"
+
 
 @attr.s(auto_attribs=True)
 class Event:
@@ -46,7 +48,7 @@ class Event:
     def label(self):
         if (
             not self.is_root
-            and self.name.startswith("torchprof_nn_module")
+            and self.name.startswith(NN_MODULE_PREFIX)
             and self.name.startswith(self.parent.name)
         ):
             # this adds one char for delimiter
@@ -171,7 +173,7 @@ def _add_hook_trace(trace: Trace):
         return
 
     module._orig_forward = module.forward
-    name = "torchprof_nn_module::" + ".".join(trace.path)
+    name = NN_MODULE_PREFIX + ".".join(trace.path)
 
     @wraps(module._orig_forward)
     def _wrapper(*args, **kwargs):

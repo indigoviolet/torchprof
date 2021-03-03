@@ -171,4 +171,6 @@ Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ reg
 ** TODO
 
 - [ ] fix up tests
+- [ ] merge region profiler stuff into here
+- [ ] Add indentation coloring in the table using rich
 - [ ] add memory profiling
