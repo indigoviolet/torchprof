@@ -144,7 +144,7 @@ def walk_modules(module, name="", path=()) -> Generator[Trace, None, None]:
 
 @contextmanager
 def profile(
-    model: nn.Module, enabled: bool = True, use_cuda: bool = False, paths=None
+    model: nn.Module, enabled: bool = True, **kwargs
 ) -> Generator[Optional[ProfileParser], None, None]:
     if not enabled:
         with nullcontext():
@@ -154,7 +154,7 @@ def profile(
         try:
             for t in tqdm(traces, desc="Adding traces"):
                 _add_hook_trace(t)
-            with tprofiler.profile(use_cuda=use_cuda) as prof:
+            with tprofiler.profile(**kwargs) as prof:
                 yield ProfileParser(prof)
         finally:
             for t in tqdm(traces, desc="Removing traces"):
@@ -221,7 +221,10 @@ class ProfileParser:
 
     def parse(self):
         function_events: tprofiler.EventList = self.prof.function_events  # type: ignore[assignment]
-        function_events.populate_cpu_children()
+
+        # populate_cpu_children() was made private (and unnecessary in pytorch 1.8)
+        if hasattr(function_events, "populate_cpu_children"):
+            function_events.populate_cpu_children()
 
         events: List[Event] = [
             Event.from_function_event(e)
