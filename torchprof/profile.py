@@ -3,16 +3,67 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from functools import cached_property, wraps
-from typing import Any, Callable, ClassVar, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, ClassVar, Dict, Generator, List, Optional, Tuple, cast
 
 import attr
+import colorama
 import torch.autograd.profiler as tprofiler
+from rich.console import Console
 from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
 
 NN_MODULE_PREFIX = "torch_nn_module::"
+
+
+@dataclass
+class ColoredPrinter:
+    terminal_jupyter_hack: bool
+
+    COLORS = {
+        0: "white",
+        1: "red",
+        2: "green",
+        3: "blue",
+        4: "yellow",
+        5: "magenta",
+        6: "cyan",
+        7: "red",
+        8: "green",
+        9: "blue",
+        10: "yellow",
+        11: "magenta",
+        12: "cyan",
+    }
+
+    def print(self, level: int, *txts: str) -> List[str]:
+        color = self.COLORS.get(level) or "white"
+        return [self.print_one(t, color) for t in txts]
+
+    def print_one(self, txt: str, color: str) -> str:
+        with self.console.capture() as capture:
+            self.console.print(f"[{color}]{txt}[/]")
+        return cast(str, capture.get().strip())
+
+    @cached_property
+    def console(self):
+        # https://github.com/willmcgugan/rich/issues/870
+        #
+        # In emacs jupyter (ein), we need this hack to not print
+        # =<rich.jupyter.JupyterRenderable>= everywhere
+        #
+        # Even though we have to specify =color_system=truecolor=, this will only
+        # print 8 colors and not even the bright versions (at least in my usage)
+
+        colorama.deinit()
+        if self.terminal_jupyter_hack:
+            colorama.init(convert=False, strip=False)
+            return Console(force_jupyter=False, color_system="truecolor")
+        else:
+            colorama.init()
+            return Console()
 
 
 @attr.s(auto_attribs=True)
@@ -57,9 +108,13 @@ class Event:
             parts = self.name.split("::")
             return self.name if parts[0] == "aten" else parts[-1]
 
-    @cached_property
+    @property
     def is_root(self):
         return self.parent_id is None
+
+    @property
+    def level(self) -> int:
+        return len(self.ancestor_ids) if self.ancestor_ids is not None else 0
 
     @cached_property
     def children(self):
@@ -155,7 +210,8 @@ def profile(
             for t in tqdm(traces, desc="Adding traces"):
                 _add_hook_trace(t)
             with tprofiler.profile(**kwargs) as prof:
-                yield ProfileParser(prof)
+                with tprofiler.record_function("Total"):
+                    yield ProfileParser(prof)
         finally:
             for t in tqdm(traces, desc="Removing traces"):
                 _remove_hook_trace(t)
@@ -267,6 +323,8 @@ class ProfileParser:
         display_empty_rows: bool = False,
         sort_by: List[str] = ["cuda_time"],
         filter_roots: bool = False,
+        color: bool = True,
+        terminal_jupyter: bool = True,
     ):
 
         filter_res = [re.compile(p) for p in filter]
@@ -285,6 +343,9 @@ class ProfileParser:
             self.totals["self_cpu_time"],
             self.totals["self_cuda_time"],
         )
+
+        colored_printer = ColoredPrinter(terminal_jupyter_hack=terminal_jupyter)
+
         for evt, label in tqdm(
             get_tree_labels(self.events, filter_fn, sort_key), desc="Make rows"
         ):
@@ -299,13 +360,8 @@ class ProfileParser:
             if not display_empty_rows and not any(formatted_cols):
                 continue
 
-            table.append(
-                [
-                    label,
-                    *formatted_cols,
-                    evt.count,
-                ]
-            )
+            cols = [label, *formatted_cols, evt.count]
+            table.append(colored_printer.print(evt.level, *cols) if color else cols)
 
         print(f"\n\nCPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))

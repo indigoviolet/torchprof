@@ -12,6 +12,7 @@ Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it ha
 - works with [[https://github.com/indigoviolet/region_profiler][region_profiler]] to annotate arbitrary regions/functions and profile them
 - filter based on node name or % of total time
 - sorting
+- Colored-by-level printing to make the table easy to read in the terminal
 
 ** Demo
 
@@ -164,6 +165,16 @@ Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ reg
 +---------------+--------------+--------------+-------------+---------------+---------+
 #+end_example
 
+** Notes
+
+*** Interaction with torchscript
+
+This method of profiling does not work inside a JIT-ed module - ie. the
+submodules inside a module saved with =torch.jit.script= are not displayed in the
+profile breakdown. I think because the =forward= methods are not "late bound", so
+we can't wrap them on the scripted modules and have the wrapped versions be
+invoked.
+
 ** LICENSE
 
 [[file:LICENSE][MIT]]
@@ -171,6 +182,6 @@ Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ reg
 ** TODO
 
 - [ ] fix up tests
-- [ ] merge region profiler stuff into here
-- [ ] Add indentation coloring in the table using rich
+- [X] Add indentation coloring in the table using rich
+- [ ] merge region profiler stuff into here (but be careful: region_profiler might be used for memory profiling)
 - [ ] add memory profiling
