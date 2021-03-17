@@ -351,10 +351,10 @@ class ProfileParser:
         ):
 
             formatted_cols = [
-                format_time(evt.self_cpu_time, cpu_time_total, min_pct),
-                format_time(evt.cpu_time, cpu_time_total, min_pct),
-                format_time(evt.self_cuda_time, cuda_time_total, min_pct),
-                format_time(evt.cuda_time, cuda_time_total, min_pct),
+                format_time(evt.self_cpu_time, cpu_time_total, evt.count, min_pct),
+                format_time(evt.cpu_time, cpu_time_total, evt.count, min_pct),
+                format_time(evt.self_cuda_time, cuda_time_total, evt.count, min_pct),
+                format_time(evt.cuda_time, cuda_time_total, evt.count, min_pct),
             ]
 
             if not display_empty_rows and not any(formatted_cols):
@@ -367,10 +367,14 @@ class ProfileParser:
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
 
 
-def format_time(time, total, min_pct):
+def format_time(time: float, total: float, count: int, min_pct: float):
     pct = time * 100.0 / total
+    avg_time = time / count
     if pct >= min_pct:
-        return f"{format_us(time)} ({pct:.0f}%)"
+        if count > 1:
+            return f"{format_us(time)}/{format_us(avg_time)} ({pct:.0f}%)"
+        else:
+            return f"{format_us(time)} ({pct:.0f}%)"
     else:
         return ""
 
@@ -385,7 +389,7 @@ def format_us(v_us):
     elif v_us > US_IN_MS:
         return f"{(v_us / US_IN_MS) :.1f}ms"
     else:
-        return f"{(v_us ) : .1f}us"
+        return f"{(v_us ) :.1f}µs"
 
 
 def get_tree_labels(
