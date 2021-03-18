@@ -5,7 +5,18 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property, wraps
-from typing import Any, Callable, ClassVar, Dict, Generator, List, Optional, Tuple, cast
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    cast,
+)
 
 import attr
 import colorama
@@ -71,7 +82,7 @@ class Event:
     name: str
     id: int
     parent_id: Optional[int]
-    children_ids: List[int]
+    children_ids: Iterable[int]
     self_cpu_time: float
     self_cuda_time: float
     cpu_time: float
@@ -86,6 +97,9 @@ class Event:
 
     @classmethod
     def register(cls, instance):
+        assert (
+            instance.id not in cls.events_by_id
+        ), f"{instance=}, {cls.events_by_id[instance.id]=}"
         cls.events_by_id[instance.id] = instance
 
     @cached_property
@@ -122,7 +136,7 @@ class Event:
 
     @cached_property
     def ancestors(self):
-        assert self.ancestor_ids is not None
+        assert self.ancestor_ids is not None, self
         return [Event.events_by_id[i] for i in self.ancestor_ids]
 
     @cached_property
@@ -139,11 +153,13 @@ class Event:
 
     @classmethod
     def from_function_event(cls, evt: tprofiler.FunctionEvent) -> Event:
+        # We deliberately don't use evt.id anywhere because with
+        # use_kineto=True, it seems these are not actually unique
         return Event(
             name=evt.name,
-            id=evt.id,
-            parent_id=(evt.cpu_parent.id if evt.cpu_parent is not None else None),
-            children_ids=[e.id for e in evt.cpu_children],
+            id=id(evt),
+            parent_id=(id(evt.cpu_parent) if evt.cpu_parent is not None else None),
+            children_ids=set([id(e) for e in evt.cpu_children]),
             self_cpu_time=evt.self_cpu_time_total,
             self_cuda_time=evt.self_cuda_time_total,
             cpu_time=evt.cpu_time_total,
