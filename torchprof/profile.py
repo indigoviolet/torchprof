@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property, wraps
 from typing import (
     Any,
@@ -18,7 +18,6 @@ from typing import (
     cast,
 )
 
-import attr
 import colorama
 import torch.autograd.profiler as tprofiler
 from rich.console import Console
@@ -77,7 +76,7 @@ class ColoredPrinter:
             return Console()
 
 
-@attr.s(auto_attribs=True)
+@dataclass
 class Event:
     name: str
     id: int
@@ -88,12 +87,18 @@ class Event:
     cpu_time: float
     cuda_time: float
     count: float
-    ancestor_ids: Optional[List[int]] = attr.ib(default=None)
+    ancestor_ids: Optional[List[int]] = None
 
     events_by_id: ClassVar[Dict[int, Event]] = {}
 
-    def __attrs_post_init__(self):
+    def __post_init__(self):
         Event.register(self)
+
+    @classmethod
+    def reset_registry(cls):
+        # This is useful so that two separate profile runs don't have collisions
+        # in events_by_id
+        cls.events_by_id = {}
 
     @classmethod
     def register(cls, instance):
@@ -193,7 +198,7 @@ class Event:
         return any(p.search(self.name) for p in res)
 
 
-@attr.s(auto_attribs=True)
+@dataclass
 class Trace:
     path: Tuple[str]
     leaf: bool
@@ -221,6 +226,7 @@ def profile(
         with nullcontext():
             yield None
     else:
+        Event.reset_registry()
         traces = list(walk_modules(model))
         try:
             for t in tqdm(traces, desc="Adding traces"):
@@ -263,15 +269,13 @@ def _remove_hook_trace(trace: Trace):
         delattr(module, "_orig_forward")
 
 
-@attr.s(auto_attribs=True)
+@dataclass
 class ProfileParser:
-    prof: tprofiler.profile = attr.ib(
-        repr=lambda p: f"{p.__class__}<{len(p.function_events)}>"
-    )
+    prof: tprofiler.profile = field(repr=False)
 
-    _raw_events: Optional[List[Event]] = attr.ib(init=False, default=None)
-    _events: Optional[List[Event]] = attr.ib(init=False, default=None)
-    _totals: Optional[Dict[str, float]] = attr.ib(init=False, default=None)
+    _raw_events: Optional[List[Event]] = field(init=False, default=None)
+    _events: Optional[List[Event]] = field(init=False, default=None)
+    _totals: Optional[Dict[str, float]] = field(init=False, default=None)
 
     @property
     def raw_events(self):

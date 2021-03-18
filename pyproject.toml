@@ -10,7 +10,6 @@ readme = "README.org"
 
 [tool.poetry.dependencies]
 python = ">=3.8,<4.0"
-attr = "^0.3.1"
 tqdm = "^4.51.0"
 tabulate = "^0.8.7"
 more-itertools = "^8.6.0"
