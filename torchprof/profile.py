@@ -171,9 +171,9 @@ class Event:
     def _get_sum(cls, evts: List[Event], attr_name: str) -> float:
         return sum(getattr(e, attr_name) for e in evts)
 
-    def matches(self, res: List[re.Pattern]) -> bool:
+    def matches(self, res: List[re.Pattern], default: bool) -> bool:
         if not len(res):
-            return True
+            return default
         return any(p.search(self.name) for p in res)
 
 
@@ -318,7 +318,8 @@ class ProfileParser:
 
     def display(
         self,
-        filter: List[str] = [r"^torchprof_nn_module::", r"^region_profiler::"],
+        allow: List[str] = [f"^{NN_MODULE_PREFIX}", r"^region_profiler::"],
+        block: List[str] = ["^aten::"],
         min_pct=1,
         display_empty_rows: bool = False,
         sort_by: List[str] = ["cuda_time"],
@@ -327,15 +328,20 @@ class ProfileParser:
         terminal_jupyter: bool = True,
     ):
 
-        filter_res = [re.compile(p) for p in filter]
+        allow_res = [re.compile(p) for p in allow]
+        block_res = [re.compile(p) for p in block]
 
-        filter_fn = lambda e: (
-            True if (not filter_roots and e.is_root) else e.matches(filter_res)
-        )
+        def allow_fn(e):
+            if not filter_roots and e.is_root:
+                return True
+            elif e.matches(block_res, False):
+                return False
+            else:
+                return e.matches(allow_res, True)
 
         sort_key = lambda e: tuple(getattr(e, s) for s in sort_by)
 
-        headers = ["Node", "Self CPU", "CPU", "Self CUDA", "CUDA", "Count"]
+        headers = ["Node", "Self CPU", "CPU", "Self CUDA", "CUDA", "#"]
         colalign = ("left", "right", "right", "right", "right")
         table = []
 
@@ -347,7 +353,7 @@ class ProfileParser:
         colored_printer = ColoredPrinter(terminal_jupyter_hack=terminal_jupyter)
 
         for evt, label in tqdm(
-            get_tree_labels(self.events, filter_fn, sort_key), desc="Make rows"
+            get_tree_labels(self.events, allow_fn, sort_key), desc="Make rows"
         ):
 
             formatted_cols = [
@@ -367,16 +373,21 @@ class ProfileParser:
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
 
 
-def format_time(time: float, total: float, count: int, min_pct: float):
+def format_time(
+    time: float,
+    total: float,
+    count: int,
+    min_pct: float,
+) -> str:
     pct = time * 100.0 / total
-    avg_time = time / count
-    if pct >= min_pct:
-        if count > 1:
-            return f"{format_us(time)}/{format_us(avg_time)} ({pct:.0f}%)"
-        else:
-            return f"{format_us(time)} ({pct:.0f}%)"
-    else:
+    if pct < min_pct:
         return ""
+
+    time_str = format_us(time)
+    pct_str = f"{pct:.0f}%"
+    avg_time_str = f"/{format_us(time / count)}" if count > 1 else ""
+
+    return f"{time_str}{avg_time_str} ({pct_str})"
 
 
 US_IN_S = 1000 * 1000
@@ -394,23 +405,23 @@ def format_us(v_us):
 
 def get_tree_labels(
     events: List[Event],
-    filter_fn: Callable[[Event], bool],
+    allow_fn: Callable[[Event], bool],
     sort_key: Callable[[Event], Tuple[int, ...]],
 ) -> Generator[Tuple[Event, str], None, None]:
 
     roots = sorted(
-        [e for e in events if filter_fn(e) and e.is_root], key=sort_key, reverse=True
+        [e for e in events if allow_fn(e) and e.is_root], key=sort_key, reverse=True
     )
 
     for e in roots:
         yield (e, e.label)
-        yield from _tree_labels(e, " ", filter_fn, sort_key)
+        yield from _tree_labels(e, " ", allow_fn, sort_key)
 
 
 def _tree_labels(
     root: Event,
     stems: str,
-    filter_fn: Callable[[Event], bool],
+    allow_fn: Callable[[Event], bool],
     sort_key: Callable[[Event], Tuple[int, ...]],
 ) -> Generator[Tuple[Event, str], None, None]:
     vert_stem, middle_branch, end_branch, space = (
@@ -420,7 +431,7 @@ def _tree_labels(
         " ",
     )
     children = sorted(
-        [c for c in root.children if filter_fn(c)], key=sort_key, reverse=True
+        [c for c in root.children if allow_fn(c)], key=sort_key, reverse=True
     )
     num_children = len(children)
     for i, c in enumerate(children):
@@ -429,4 +440,4 @@ def _tree_labels(
         yield (c, stems + branch + c.label)
 
         desc_stems = stems + (space if last_child else vert_stem) + space
-        yield from _tree_labels(c, desc_stems, filter_fn, sort_key)
+        yield from _tree_labels(c, desc_stems, allow_fn, sort_key)
