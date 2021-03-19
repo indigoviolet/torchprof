@@ -184,4 +184,5 @@ invoked.
 - [ ] fix up tests
 - [X] Add indentation coloring in the table using rich
 - [ ] merge region profiler stuff into here (but be careful: region_profiler might be used for memory profiling)
-- [ ] add memory profiling
+- [ ] add memory profiling (pytorch already has tensor size, shape, code location info)
+- [ ] See Kineto orphan events bug: https://github.com/pytorch/pytorch/issues/54267

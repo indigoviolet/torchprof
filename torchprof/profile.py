@@ -4,218 +4,17 @@ import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from functools import cached_property, wraps
-from typing import (
-    Any,
-    Callable,
-    ClassVar,
-    Dict,
-    Generator,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    cast,
-)
+from typing import Dict, Generator, List, Optional
 
-import colorama
 import torch.autograd.profiler as tprofiler
-from rich.console import Console
 from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
 
-NN_MODULE_PREFIX = "torch_nn_module::"
-
-
-@dataclass
-class ColoredPrinter:
-    terminal_jupyter_hack: bool
-
-    COLORS = {
-        0: "white",
-        1: "red",
-        2: "green",
-        3: "blue",
-        4: "yellow",
-        5: "magenta",
-        6: "cyan",
-        7: "red",
-        8: "green",
-        9: "blue",
-        10: "yellow",
-        11: "magenta",
-        12: "cyan",
-    }
-
-    def print(self, level: int, *txts: str) -> List[str]:
-        color = self.COLORS.get(level) or "white"
-        return [self.print_one(t, color) for t in txts]
-
-    def print_one(self, txt: str, color: str) -> str:
-        with self.console.capture() as capture:
-            self.console.print(f"[{color}]{txt}[/]")
-        return cast(str, capture.get().strip())
-
-    @cached_property
-    def console(self):
-        # https://github.com/willmcgugan/rich/issues/870
-        #
-        # In emacs jupyter (ein), we need this hack to not print
-        # =<rich.jupyter.JupyterRenderable>= everywhere
-        #
-        # Even though we have to specify =color_system=truecolor=, this will only
-        # print 8 colors and not even the bright versions (at least in my usage)
-
-        colorama.deinit()
-        if self.terminal_jupyter_hack:
-            colorama.init(convert=False, strip=False)
-            return Console(force_jupyter=False, color_system="truecolor")
-        else:
-            colorama.init()
-            return Console()
-
-
-@dataclass
-class Event:
-    name: str
-    id: int
-    parent_id: Optional[int]
-    children_ids: Iterable[int]
-    self_cpu_time: float
-    self_cuda_time: float
-    cpu_time: float
-    cuda_time: float
-    count: float
-    ancestor_ids: Optional[List[int]] = None
-
-    events_by_id: ClassVar[Dict[int, Event]] = {}
-
-    def __post_init__(self):
-        Event.register(self)
-
-    @classmethod
-    def reset_registry(cls):
-        # This is useful so that two separate profile runs don't have collisions
-        # in events_by_id
-        cls.events_by_id = {}
-
-    @classmethod
-    def register(cls, instance):
-        assert (
-            instance.id not in cls.events_by_id
-        ), f"{instance=}, {cls.events_by_id[instance.id]=}"
-        cls.events_by_id[instance.id] = instance
-
-    @cached_property
-    def parent(self):
-        if self.is_root:
-            return None
-        assert self.parent_id is not None
-        return Event.events_by_id[self.parent_id]
-
-    @cached_property
-    def label(self):
-        if (
-            not self.is_root
-            and self.name.startswith(NN_MODULE_PREFIX)
-            and self.name.startswith(self.parent.name)
-        ):
-            # this adds one char for delimiter
-            return self.name[(len(self.parent.name) + 1) :]
-        else:
-            parts = self.name.split("::")
-            return self.name if parts[0] == "aten" else parts[-1]
-
-    @property
-    def is_root(self):
-        return self.parent_id is None
-
-    @property
-    def level(self) -> int:
-        return len(self.ancestor_ids) if self.ancestor_ids is not None else 0
-
-    @cached_property
-    def children(self):
-        return [Event.events_by_id[i] for i in self.children_ids]
-
-    @cached_property
-    def ancestors(self):
-        assert self.ancestor_ids is not None, self
-        return [Event.events_by_id[i] for i in self.ancestor_ids]
-
-    @cached_property
-    def ancestor_names(self):
-        return [e.name for e in self.ancestors]
-
-    @cached_property
-    def path(self):
-        return self.ancestor_names + [self.name]
-
-    @cached_property
-    def path_id(self):
-        return hash(tuple(self.path))
-
-    @classmethod
-    def from_function_event(cls, evt: tprofiler.FunctionEvent) -> Event:
-        # We deliberately don't use evt.id anywhere because with
-        # use_kineto=True, it seems these are not actually unique
-        return Event(
-            name=evt.name,
-            id=id(evt),
-            parent_id=(id(evt.cpu_parent) if evt.cpu_parent is not None else None),
-            children_ids=set([id(e) for e in evt.cpu_children]),
-            self_cpu_time=evt.self_cpu_time_total,
-            self_cuda_time=evt.self_cuda_time_total,
-            cpu_time=evt.cpu_time_total,
-            cuda_time=evt.cuda_time_total,
-            count=evt.count,
-        )
-
-    @classmethod
-    def from_group(cls, evts: List[Event]) -> Event:
-        rep = evts[0]
-        return Event(
-            name=rep.name,
-            id=rep.path_id,
-            parent_id=(rep.parent.path_id if rep.parent_id is not None else None),
-            children_ids=list(set([c.path_id for c in rep.children])),
-            self_cpu_time=cls._get_sum(evts, "self_cpu_time"),
-            self_cuda_time=cls._get_sum(evts, "self_cuda_time"),
-            cpu_time=cls._get_sum(evts, "cpu_time"),
-            cuda_time=cls._get_sum(evts, "cuda_time"),
-            count=cls._get_sum(evts, "count"),
-            ancestor_ids=list(set([a.path_id for a in rep.ancestors])),
-        )
-
-    @classmethod
-    def _get_sum(cls, evts: List[Event], attr_name: str) -> float:
-        return sum(getattr(e, attr_name) for e in evts)
-
-    def matches(self, res: List[re.Pattern], default: bool) -> bool:
-        if not len(res):
-            return default
-        return any(p.search(self.name) for p in res)
-
-
-@dataclass
-class Trace:
-    path: Tuple[str]
-    leaf: bool
-    module: nn.Module
-    name: str
-
-
-def walk_modules(module, name="", path=()) -> Generator[Trace, None, None]:
-    """Generator. Walks through a PyTorch Module and outputs Trace tuples"""
-    if not name:
-        name = module.__class__.__name__
-    named_children = list(module.named_children())
-    path = path + (name,)
-    yield Trace(path, len(named_children) == 0, module, name)
-    # recursively walk into all submodules
-    for name, child_module in named_children:
-        yield from walk_modules(child_module, name=name, path=path)
+from .event import Event
+from .format import ColoredPrinter, format_time, format_us
+from .trace import NN_MODULE_PREFIX, add_hook_trace, remove_hook_trace, walk_modules
+from .tree import get_tree_labels
 
 
 @contextmanager
@@ -230,43 +29,13 @@ def profile(
         traces = list(walk_modules(model))
         try:
             for t in tqdm(traces, desc="Adding traces"):
-                _add_hook_trace(t)
+                add_hook_trace(t)
             with tprofiler.profile(**kwargs) as prof:
                 with tprofiler.record_function("Total"):
                     yield ProfileParser(prof)
         finally:
             for t in tqdm(traces, desc="Removing traces"):
-                _remove_hook_trace(t)
-
-
-# Pytorch modules don't play nice with mypy. All attributes are assumed to be
-# Tensor|Module, but this is not true. This is a quick way to eliminate type
-# errors for Pytorch nn.Module
-PytorchModule = Any
-
-
-def _add_hook_trace(trace: Trace):
-    module: PytorchModule = trace.module
-    if hasattr(module, "_orig_forward"):
-        return
-
-    module._orig_forward = module.forward
-    name = NN_MODULE_PREFIX + ".".join(trace.path)
-
-    @wraps(module._orig_forward)
-    def _wrapper(*args, **kwargs):
-        with tprofiler.record_function(name):
-            res = module._orig_forward(*args, **kwargs)
-        return res
-
-    module.forward = _wrapper
-
-
-def _remove_hook_trace(trace: Trace):
-    module: PytorchModule = trace.module
-    if hasattr(module, "_orig_forward"):
-        module.forward = module._orig_forward
-        delattr(module, "_orig_forward")
+                remove_hook_trace(t)
 
 
 @dataclass
@@ -391,73 +160,3 @@ class ProfileParser:
 
         print(f"\n\nCPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
-
-
-def format_time(
-    time: float,
-    total: float,
-    count: int,
-    min_pct: float,
-) -> str:
-    pct = time * 100.0 / total
-    if pct < min_pct:
-        return ""
-
-    time_str = format_us(time)
-    pct_str = f"{pct:.0f}%"
-    avg_time_str = f"/{format_us(time / count)}" if count > 1 else ""
-
-    return f"{time_str}{avg_time_str} ({pct_str})"
-
-
-US_IN_S = 1000 * 1000
-US_IN_MS = 1000
-
-
-def format_us(v_us):
-    if v_us > US_IN_S:
-        return f"{(v_us / US_IN_S) :.1f}s"
-    elif v_us > US_IN_MS:
-        return f"{(v_us / US_IN_MS) :.1f}ms"
-    else:
-        return f"{(v_us ) :.1f}µs"
-
-
-def get_tree_labels(
-    events: List[Event],
-    allow_fn: Callable[[Event], bool],
-    sort_key: Callable[[Event], Tuple[int, ...]],
-) -> Generator[Tuple[Event, str], None, None]:
-
-    roots = sorted(
-        [e for e in events if allow_fn(e) and e.is_root], key=sort_key, reverse=True
-    )
-
-    for e in roots:
-        yield (e, e.label)
-        yield from _tree_labels(e, " ", allow_fn, sort_key)
-
-
-def _tree_labels(
-    root: Event,
-    stems: str,
-    allow_fn: Callable[[Event], bool],
-    sort_key: Callable[[Event], Tuple[int, ...]],
-) -> Generator[Tuple[Event, str], None, None]:
-    vert_stem, middle_branch, end_branch, space = (
-        "\u2502",  # │
-        "\u251c\u2500\u2500",  # ├──
-        "\u2514\u2500\u2500",  # └──
-        " ",
-    )
-    children = sorted(
-        [c for c in root.children if allow_fn(c)], key=sort_key, reverse=True
-    )
-    num_children = len(children)
-    for i, c in enumerate(children):
-        last_child = i == num_children - 1
-        branch = end_branch if last_child else middle_branch
-        yield (c, stems + branch + c.label)
-
-        desc_stems = stems + (space if last_child else vert_stem) + space
-        yield from _tree_labels(c, desc_stems, allow_fn, sort_key)
