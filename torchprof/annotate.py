@@ -8,23 +8,32 @@ from torch.cuda import nvtx
 
 REGION_PREFIX = "torchprof_region::"
 
-CUDA_SYNCHRONIZE = True
+GLOBALS = {"nvtx": True, "sync_cuda": True}
 
 
-def cuda_synchronize(val: Optional[bool] = None):
-    global CUDA_SYNCHRONIZE
-    if val is not None:
-        CUDA_SYNCHRONIZE = val
-    return CUDA_SYNCHRONIZE
+def global_settings(**settings):
+    global GLOBALS
+
+    restore_globals = {**GLOBALS}
+    try:
+        GLOBALS.update(settings)
+        yield
+    finally:
+        GLOBALS.update(restore_globals)
 
 
 @contextmanager
 def region(name: str):
-    with tprofiler.record_function(f"{REGION_PREFIX}{name}"):
-        with nvtx_range(name):
-            yield
-            if cuda_synchronize():
-                torch.cuda.synchronize()
+    range_cm = (
+        nvtx_range(name)
+        if GLOBALS["nvtx"]
+        else tprofiler.record_function(f"{REGION_PREFIX}{name}")
+    )
+
+    with range_cm:  # type: ignore[attr-defined]
+        yield
+        if GLOBALS["sync_cuda"]:
+            torch.cuda.synchronize()
 
 
 @contextmanager

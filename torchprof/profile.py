@@ -11,7 +11,7 @@ from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
 
-from .annotate import REGION_PREFIX, cuda_synchronize, region
+from .annotate import REGION_PREFIX, global_settings, region
 from .event import Event
 from .format import ColoredPrinter, format_time, format_us
 from .trace import NN_MODULE_PREFIX, add_hook_trace, remove_hook_trace, walk_modules
@@ -38,12 +38,11 @@ def profile(
         try:
             for t in tqdm(traces, desc="Adding traces", disable=not progress):
                 add_hook_trace(t)
-            cuda_synchronize(sync_cuda)
-            if nvtx:
-                with _nvtx_profile():
-                    yield None
-            else:
-                with _torch_profile(**profiler_kwargs) as pp:
+            with global_settings(nvtx=nvtx, sync_cuda=sync_cuda):
+                profile_cm = (
+                    _nvtx_profile() if nvtx else _torch_profile(**profiler_kwargs)
+                )
+                with profile_cm as pp:
                     yield pp
         finally:
             for t in tqdm(traces, desc="Removing traces", disable=not progress):
