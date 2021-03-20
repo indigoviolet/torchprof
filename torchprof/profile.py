@@ -39,10 +39,13 @@ def profile(
             for t in tqdm(traces, desc="Adding traces", disable=not progress):
                 add_hook_trace(t)
             with global_settings(nvtx=nvtx, sync_cuda=sync_cuda):
+                # invoking these functions will emit the region(), so wrap in lambda
                 profile_cm = (
-                    _nvtx_profile() if nvtx else _torch_profile(**profiler_kwargs)
+                    lambda: _nvtx_profile()
+                    if nvtx
+                    else lambda: _torch_profile(**profiler_kwargs)
                 )
-                with profile_cm as pp:
+                with profile_cm() as pp:  # type: ignore[attr-defined]
                     yield pp
         finally:
             for t in tqdm(traces, desc="Removing traces", disable=not progress):
