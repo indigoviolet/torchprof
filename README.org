@@ -9,10 +9,11 @@ Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it ha
 ** Improvements
 
 - Can profile non-leaf layers
-- works with [[https://github.com/indigoviolet/region_profiler][region_profiler]] to annotate arbitrary regions/functions and profile them
+- annotate arbitrary regions/functions and profile them
 - filter based on node name or % of total time
 - sorting
 - Colored-by-level printing to make the table easy to read in the terminal
+- nvtx support
 
 ** Demo
 
@@ -94,9 +95,9 @@ prof.display(min_pct=0)
 
 *** Show low level events (filtering on node name)
 
-Turn off the default filtering (shows only ~nn.Module~ and ~region-profiler~ regions by default)
+Turn off the default filtering (shows only ~nn.Module~ and torchprof regions by default)
 
-~prof.display(min_pct=1, filter=[])~
+~prof.display(min_pct=1, allow=[], block=[])~
 
 #+begin_example
 +----------------------------------------+--------------+---------------+--------------+---------------+---------+
@@ -183,6 +184,7 @@ invoked.
 
 - [ ] fix up tests
 - [X] Add indentation coloring in the table using rich
-- [ ] merge region profiler stuff into here (but be careful: region_profiler might be used for memory profiling)
+- [X] merge region profiler stuff into here (but be careful: region_profiler might be used for memory profiling)
 - [ ] add memory profiling (pytorch already has tensor size, shape, code location info)
 - [ ] See Kineto orphan events bug: https://github.com/pytorch/pytorch/issues/54267
+- [ ] Add iterator annotation (@func() on next())

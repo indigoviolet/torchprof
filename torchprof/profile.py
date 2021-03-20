@@ -11,15 +11,23 @@ from tabulate import tabulate
 from torch import nn
 from tqdm import tqdm
 
+from .annotate import REGION_PREFIX, cuda_synchronize, region
 from .event import Event
 from .format import ColoredPrinter, format_time, format_us
 from .trace import NN_MODULE_PREFIX, add_hook_trace, remove_hook_trace, walk_modules
 from .tree import get_tree_labels
 
+TOP_REGION = "<torchprof>"
+
 
 @contextmanager
 def profile(
-    model: nn.Module, enabled: bool = True, **kwargs
+    model: nn.Module,
+    enabled: bool = True,
+    nvtx: bool = False,
+    progress: bool = True,
+    sync_cuda: bool = True,
+    **profiler_kwargs,
 ) -> Generator[Optional[ProfileParser], None, None]:
     if not enabled:
         with nullcontext():
@@ -28,14 +36,32 @@ def profile(
         Event.reset_registry()
         traces = list(walk_modules(model))
         try:
-            for t in tqdm(traces, desc="Adding traces"):
+            for t in tqdm(traces, desc="Adding traces", disable=not progress):
                 add_hook_trace(t)
-            with tprofiler.profile(**kwargs) as prof:
-                with tprofiler.record_function("Total"):
-                    yield ProfileParser(prof)
+            cuda_synchronize(sync_cuda)
+            if nvtx:
+                with _nvtx_profile():
+                    yield None
+            else:
+                with _torch_profile(**profiler_kwargs) as pp:
+                    yield pp
         finally:
-            for t in tqdm(traces, desc="Removing traces"):
+            for t in tqdm(traces, desc="Removing traces", disable=not progress):
                 remove_hook_trace(t)
+
+
+@contextmanager
+def _nvtx_profile():
+    with tprofiler.emit_nvtx():
+        with region(TOP_REGION):
+            yield
+
+
+@contextmanager
+def _torch_profile(**profiler_kwargs) -> Generator[ProfileParser, None, None]:
+    with tprofiler.profile(**profiler_kwargs) as prof:
+        with region(TOP_REGION):
+            yield ProfileParser(prof)
 
 
 @dataclass
@@ -107,7 +133,11 @@ class ProfileParser:
 
     def display(
         self,
-        allow: List[str] = [f"^{NN_MODULE_PREFIX}", r"^region_profiler::"],
+        allow: List[str] = [
+            f"^{NN_MODULE_PREFIX}",
+            f"^{REGION_PREFIX}",
+            r"^region_profiler::",
+        ],
         block: List[str] = ["^aten::"],
         min_pct=1,
         display_empty_rows: bool = False,
