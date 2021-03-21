@@ -26,9 +26,9 @@ def global_settings(**settings) -> Generator[None, None, None]:
 @contextmanager
 def region(name: str) -> Generator[None, None, None]:
     range_cm = (
-        lambda: nvtx_range(name)
+        (lambda: nvtx_range(name))
         if GLOBALS["nvtx"]
-        else lambda: tprofiler.record_function(f"{REGION_PREFIX}{name}")
+        else (lambda: tprofiler.record_function(f"{REGION_PREFIX}{name}"))  # type: ignore[return-value]
     )
     # https://github.com/python/mypy/issues/5512
     with range_cm():  # type: ignore[attr-defined]
@@ -67,3 +67,26 @@ def func(name: Optional[str] = None) -> Callable[[F], F]:
         return cast(F, wrapper)
 
     return decorator
+
+
+# Pytorch modules don't play nice with mypy. All attributes are assumed to be
+# Tensor|Module, but this is not true. This is a quick way to eliminate type
+# errors for Pytorch nn.Module
+PytorchModule = Any
+
+
+def module(mod: PytorchModule, name: str) -> Callable[[], None]:
+    orig_forward = mod.forward
+
+    @wraps(orig_forward)
+    def _wrapper(*args, **kwargs):
+        with region(name):
+            res = orig_forward(*args, **kwargs)
+        return res
+
+    mod.forward = _wrapper
+
+    def restore_forward():
+        mod.forward = orig_forward
+
+    return restore_forward

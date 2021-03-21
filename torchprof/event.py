@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Iterable, List, Optional
 
 import torch.autograd.profiler as tprofiler
 
-from .trace import NN_MODULE_PREFIX
+from .annotate import REGION_PREFIX
 
 
 @dataclass
@@ -52,7 +52,7 @@ class Event:
     def label(self):
         if (
             not self.is_root
-            and self.name.startswith(NN_MODULE_PREFIX)
+            and self.name.startswith(REGION_PREFIX)
             and self.name.startswith(self.parent.name)
         ):
             # this adds one char for delimiter

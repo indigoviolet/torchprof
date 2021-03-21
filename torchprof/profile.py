@@ -14,7 +14,7 @@ from tqdm import tqdm
 from .annotate import REGION_PREFIX, global_settings, region
 from .event import Event
 from .format import ColoredPrinter, format_time, format_us
-from .trace import NN_MODULE_PREFIX, add_hook_trace, remove_hook_trace, walk_modules
+from .trace import walk_modules
 from .tree import get_tree_labels
 
 TOP_REGION = "<torchprof>"
@@ -37,19 +37,19 @@ def profile(
         traces = list(walk_modules(model))
         try:
             for t in tqdm(traces, desc="Adding traces", disable=not progress):
-                add_hook_trace(t)
+                t.add_hook()
             with global_settings(nvtx=nvtx, sync_cuda=sync_cuda):
                 # invoking these functions will emit the region(), so wrap in lambda
                 profile_cm = (
-                    lambda: _nvtx_profile()
+                    _nvtx_profile
                     if nvtx
-                    else lambda: _torch_profile(**profiler_kwargs)
+                    else (lambda: _torch_profile(**profiler_kwargs))
                 )
-                with profile_cm() as pp:  # type: ignore[attr-defined]
-                    yield pp
+                with profile_cm() as p:
+                    yield p
         finally:
             for t in tqdm(traces, desc="Removing traces", disable=not progress):
-                remove_hook_trace(t)
+                t.remove_hook()
 
 
 @contextmanager
@@ -97,7 +97,7 @@ class ProfileParser:
 
         # populate_cpu_children() was made private (and unnecessary in pytorch 1.8)
         if hasattr(function_events, "populate_cpu_children"):
-            function_events.populate_cpu_children()
+            function_events.populate_cpu_children()  # type: ignore[attr-defined]
 
         events: List[Event] = [
             Event.from_function_event(e)
@@ -136,7 +136,6 @@ class ProfileParser:
     def display(
         self,
         allow: List[str] = [
-            f"^{NN_MODULE_PREFIX}",
             f"^{REGION_PREFIX}",
             r"^region_profiler::",
         ],
