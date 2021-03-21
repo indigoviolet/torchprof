@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from functools import wraps
-from typing import Callable, Optional
+from typing import Any, Callable, Generator, Optional, TypeVar, cast
 
 import torch
 import torch.autograd.profiler as tprofiler
@@ -11,7 +11,8 @@ REGION_PREFIX = "torchprof_region::"
 GLOBALS = {"nvtx": True, "sync_cuda": True}
 
 
-def global_settings(**settings):
+@contextmanager
+def global_settings(**settings) -> Generator[None, None, None]:
     global GLOBALS
 
     restore_globals = {**GLOBALS}
@@ -23,21 +24,21 @@ def global_settings(**settings):
 
 
 @contextmanager
-def region(name: str):
+def region(name: str) -> Generator[None, None, None]:
     range_cm = (
-        nvtx_range(name)
+        lambda: nvtx_range(name)
         if GLOBALS["nvtx"]
-        else tprofiler.record_function(f"{REGION_PREFIX}{name}")
+        else lambda: tprofiler.record_function(f"{REGION_PREFIX}{name}")
     )
-
-    with range_cm:  # type: ignore[attr-defined]
+    # https://github.com/python/mypy/issues/5512
+    with range_cm():  # type: ignore[attr-defined]
         yield
         if GLOBALS["sync_cuda"]:
             torch.cuda.synchronize()
 
 
 @contextmanager
-def nvtx_range(name: str):
+def nvtx_range(name: str) -> Generator[None, None, None]:
     nvtx.range_push(name)
     try:
         yield
@@ -45,8 +46,11 @@ def nvtx_range(name: str):
         nvtx.range_pop()
 
 
-def func(name: Optional[str] = None):
-    def decorator(f: Callable):
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def func(name: Optional[str] = None) -> Callable[[F], F]:
+    def decorator(f: F) -> F:
         nonlocal name
         if name is None:
             name = f.__name__
@@ -60,6 +64,6 @@ def func(name: Optional[str] = None):
             with region(name):
                 return f(*args, **kwargs)
 
-        return wrapper
+        return cast(F, wrapper)
 
     return decorator
