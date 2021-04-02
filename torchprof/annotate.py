@@ -37,7 +37,9 @@ def region(name: str) -> Iterator[None]:
 
 def maybe_sync():
     if GLOBALS["sync_cuda"]:
-        torch.cuda.synchronize()
+        stream = torch.cuda.current_stream()
+        if not stream.query():
+            stream.synchronize()
 
 
 def named_range(name: str) -> ContextManager[None]:
