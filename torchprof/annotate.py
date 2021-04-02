@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Generator, Optional, TypeVar, cast
+from typing import Any, Callable, ContextManager, Iterator, Optional, TypeVar, cast
 
 import torch
 import torch.autograd.profiler as tprofiler
@@ -8,11 +8,11 @@ from torch.cuda import nvtx
 
 REGION_PREFIX = "torchprof_region::"
 
-GLOBALS = {"nvtx": True, "sync_cuda": True}
+GLOBALS = {"nvtx": True, "sync_cuda": True, "enabled": True}
 
 
 @contextmanager
-def global_settings(**settings) -> Generator[None, None, None]:
+def global_settings(**settings) -> Iterator[None]:
     global GLOBALS
 
     restore_globals = {**GLOBALS}
@@ -24,21 +24,33 @@ def global_settings(**settings) -> Generator[None, None, None]:
 
 
 @contextmanager
-def region(name: str) -> Generator[None, None, None]:
-    range_cm = (
-        (lambda: nvtx_range(name))
-        if GLOBALS["nvtx"]
-        else (lambda: tprofiler.record_function(f"{REGION_PREFIX}{name}"))  # type: ignore[return-value]
-    )
-    # https://github.com/python/mypy/issues/5512
-    with range_cm():  # type: ignore[attr-defined]
+def region(name: str) -> Iterator[None]:
+    if GLOBALS["enabled"]:
+        maybe_sync()
+        # https://github.com/python/mypy/issues/5512
+        with named_range(name):
+            yield
+            maybe_sync()
+    else:
         yield
-        if GLOBALS["sync_cuda"]:
-            torch.cuda.synchronize()
+
+
+def maybe_sync():
+    if GLOBALS["sync_cuda"]:
+        torch.cuda.synchronize()
+
+
+def named_range(name: str) -> ContextManager[None]:
+    # https://github.com/python/mypy/issues/5512#issuecomment-803490883
+    return (
+        nvtx_range(name)  # type: ignore[return-value]
+        if GLOBALS["nvtx"]
+        else tprofiler.record_function(f"{REGION_PREFIX}{name}")
+    )
 
 
 @contextmanager
-def nvtx_range(name: str) -> Generator[None, None, None]:
+def nvtx_range(name: str) -> Iterator[None]:
     nvtx.range_push(name)
     try:
         yield
