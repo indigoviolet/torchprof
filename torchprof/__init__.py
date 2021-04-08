@@ -5,8 +5,4 @@ name = "torchprof"
 
 __all__ = ["profile", "region", "func", "iter", "module", "global_settings"]
 
-import snoop
-
-snoop.install()
-
 __version__ = "1.0.0"
