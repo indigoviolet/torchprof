@@ -1,10 +1,13 @@
 * torchprof
 
-A library for layer-by-layer profiling of Pytorch models.
+A library for layer-by-layer profiling of Pytorch models. Also supports
+annotating regions, functions and iterators with NVTX ranges, suitable for
+NSight systems etc.
 
 All metrics are derived using the PyTorch autograd profiler.
 
-Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it has been completely rewritten since.
+Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it
+has been completely rewritten since.
 
 ** Improvements
 
@@ -17,7 +20,8 @@ Originally based on [[https://github.com/awwong1/torchprof][awwong1]], but it ha
 
 ** Demo
 
-[[file:demo.ipynb][Notebook]]
+[[file:profile-demo.ipynb][Profiling]]
+[[file:annotate-demo.ipynb][Annotating]]
 
 ** Quickstart
 
@@ -182,11 +186,11 @@ invoked.
 
 ** TODO
 
-- [ ] fix up tests
+- [X] +fix up tests+ Replaced with demos
 - [X] Add indentation coloring in the table using rich
 - [X] merge region profiler stuff into here (but be careful: region_profiler might be used for memory profiling)
 - [X] Add a flag to no-op tp.region, tp.func etc.
-- [ ] Add iterator annotation (@func() on next())
+- [X] Add iterator annotation (@func() on next())
 - [ ] Add tp.genfunc to wrap the iterable returned from generator as well
 - [ ] add memory profiling (pytorch already has tensor size, shape, code location info)
 - [ ] See Kineto orphan events bug: https://github.com/pytorch/pytorch/issues/54267
