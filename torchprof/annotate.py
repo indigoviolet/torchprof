@@ -1,18 +1,29 @@
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, ContextManager, Iterator, Optional, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Generator,
+    Iterable,
+    Iterator,
+    Optional,
+    TypeVar,
+    cast,
+)
 
 import torch
 import torch.autograd.profiler as tprofiler
 from torch.cuda import nvtx
+from varname import varname
 
 REGION_PREFIX = "torchprof_region::"
 
-GLOBALS = {"nvtx": True, "sync_cuda": True, "enabled": True}
+GLOBALS = {"nvtx": False, "sync_cuda": True, "enabled": True}
 
 
 @contextmanager
-def global_settings(**settings) -> Iterator[None]:
+def global_settings(**settings: bool) -> Iterator[None]:
     global GLOBALS
 
     restore_globals = {**GLOBALS}
@@ -81,6 +92,33 @@ def func(name: Optional[str] = None) -> Callable[[F], F]:
         return cast(F, wrapper)
 
     return decorator
+
+
+T = TypeVar("T")
+builtin_iter = iter
+
+
+def iter(name: Optional[str] = None) -> Callable[[Iterable[T]], Iterable[T]]:
+    if name is None:
+        name = varname()
+
+    name = f"next({name})"
+
+    def proxy(input: Iterable[T]) -> Generator[T, None, None]:
+        input_iter = builtin_iter(input)
+        nonlocal name
+        assert name is not None
+        while True:
+            try:
+                # Note: region() will be called once more than the length of iterable
+                # because the last iteration will raise
+                with region(name):
+                    item = next(input_iter)
+                yield item
+            except StopIteration:
+                return
+
+    return proxy
 
 
 # Pytorch modules don't play nice with mypy. All attributes are assumed to be

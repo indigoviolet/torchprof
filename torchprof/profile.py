@@ -86,21 +86,24 @@ class ProfileParser:
     _totals: Optional[Dict[str, float]] = field(init=False, default=None)
 
     @property
-    def raw_events(self):
+    def raw_events(self) -> List[Event]:
         if self._raw_events is None:
             self.parse()
+        assert self._raw_events is not None
         return self._raw_events
 
     @property
-    def events(self):
+    def events(self) -> List[Event]:
         if self._events is None:
             self.parse()
+        assert self._events is not None
         return self._events
 
     @property
-    def totals(self):
+    def totals(self) -> Dict[str, float]:
         if self._totals is None:
             self.parse()
+        assert self._totals is not None
         return self._totals
 
     def parse(self):
@@ -192,6 +195,9 @@ class ProfileParser:
             self.totals["self_cpu_time"],
             self.totals["self_cuda_time"],
         )
+        print(f"\n\nCPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
+        if not len(self.events):
+            return
 
         colored_printer = ColoredPrinter(terminal_jupyter_hack=terminal_jupyter)
 
@@ -212,5 +218,4 @@ class ProfileParser:
             cols = [label, *formatted_cols, evt.count]
             table.append(colored_printer.print(evt.level, *cols) if color else cols)
 
-        print(f"\n\nCPU={format_us(cpu_time_total)}, CUDA={format_us(cuda_time_total)}")
         print(tabulate(table, headers=headers, tablefmt="psql", colalign=colalign))
