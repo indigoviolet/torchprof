@@ -4,7 +4,16 @@ import re
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from typing import Dict, Generator, List, Optional
+from typing import (
+    Callable,
+    ContextManager,
+    Dict,
+    Generator,
+    Iterator,
+    List,
+    Optional,
+    Union,
+)
 
 import torch.autograd.profiler as tprofiler
 from tabulate import tabulate
@@ -28,7 +37,7 @@ def profile(
     progress: bool = True,
     sync_cuda: bool = True,
     **profiler_kwargs,
-) -> Generator[Optional[ProfileParser], None, None]:
+) -> Iterator[Optional[ProfileParser]]:
     """
 
     :param model: nn.Module:
@@ -51,10 +60,13 @@ def profile(
                 t.add_hook()
             with global_settings(nvtx=nvtx, sync_cuda=sync_cuda):
                 # invoking these functions will emit the region(), so wrap in lambda
-                profile_cm = (
+                profile_cm: Union[
+                    Callable[[], ContextManager[None]],
+                    Callable[[], ContextManager[ProfileParser]],
+                ] = (
                     _nvtx_profile
                     if nvtx
-                    else (lambda: _torch_profile(**profiler_kwargs))
+                    else (lambda: _torch_profile(**profiler_kwargs))  # type: ignore[return-value]
                 )
                 with profile_cm() as p:
                     yield p
@@ -64,14 +76,14 @@ def profile(
 
 
 @contextmanager
-def _nvtx_profile():
+def _nvtx_profile() -> Iterator[None]:
     with tprofiler.emit_nvtx():
         with region(TOP_REGION):
             yield
 
 
 @contextmanager
-def _torch_profile(**profiler_kwargs) -> Generator[ProfileParser, None, None]:
+def _torch_profile(**profiler_kwargs) -> Iterator[ProfileParser]:
     with tprofiler.profile(**profiler_kwargs) as prof:
         with region(TOP_REGION):
             yield ProfileParser(prof)
