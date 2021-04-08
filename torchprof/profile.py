@@ -29,6 +29,17 @@ def profile(
     sync_cuda: bool = True,
     **profiler_kwargs,
 ) -> Generator[Optional[ProfileParser], None, None]:
+    """
+
+    :param model: nn.Module:
+    :param enabled: bool:  (Default value = True)
+    :param nvtx: bool:  (Default value = False) Emit nvtx events instead of torch profiler `record_function()`. Useful for Nsight Systems etc.
+    :param progress: bool:  (Default value = True) Show progress bar.
+    :param sync_cuda: bool:  (Default value = True) Call `torch.cuda.synchronize` on the current stream if necessary.
+    :param **profiler_kwargs: Passed through to torch.profiler -- only relevant if `nvtx` is False
+
+    """
+
     if not enabled:
         with nullcontext():
             yield None
@@ -147,6 +158,18 @@ class ProfileParser:
         color: bool = True,
         terminal_jupyter: bool = True,
     ):
+        """
+
+        :param allow: List[str]:  (Default value = [f"^{REGION_PREFIX}", r"^region_profiler::"]): allowlist
+        :param block: List[str]:  (Default value = ["^aten::"]): blocklist
+        :param min_pct:  (Default value = 1)
+        :param display_empty_rows: bool:  (Default value = False)
+        :param sort_by: List[str]:  (Default value = ["cuda_time"])
+        :param filter_roots: bool:  (Default value = False)
+        :param color: bool:  (Default value = True)
+        :param terminal_jupyter: bool:  (Default value = True): Handles using Jupyter in a terminal, where html colors aren't supported. Only relevant if color=True
+
+        """
 
         allow_res = [re.compile(p) for p in allow]
         block_res = [re.compile(p) for p in block]

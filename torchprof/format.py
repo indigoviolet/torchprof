@@ -60,6 +60,9 @@ def format_time(
     count: int,
     min_pct: float,
 ) -> str:
+    if not total:
+        return ""
+
     pct = time * 100.0 / total
     if pct < min_pct:
         return ""
